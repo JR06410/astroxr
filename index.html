@@ -608,12 +608,41 @@ function hold(o) {
   let card;
   if (o.hiTex) useHi();
   else if (HIPS.enabled && !o.hiLoading) {
+    // Survey priority, tried in order until one returns a frame with usable pixels (hips2fits hands back a blank
+    // or white frame where a survey has no coverage). PanSTARRS is sharpest for small objects but stops at
+    // dec -29 and clips nothing; DSS2 colour is the all-sky backstop with natural plate colour; DESI Legacy DR10
+    // is deeper than either but its g/r/z composite renders galaxies teal, so it only stands in where both fail.
     o.hiLoading = true;
     const px = 1600, py = Math.round(px / aspect);
-    o.survey = (o.size[0] <= 16 && o.dec > -29) ? ['CDS/P/PanSTARRS/DR1/color', 'PanSTARRS DR1'] : ['CDS/P/DSS2/color', 'DSS2 colour'];
-    const url = `https://alasky.cds.unistra.fr/hips-image-services/hips2fits?hips=${encodeURIComponent(o.survey[0])}&width=${px}&height=${py}&fov=${fovDeg}&projection=TAN&coordsys=icrs&ra=${o.ra}&dec=${o.dec}&format=jpg`;
-    loader.load(url, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; t.anisotropy = renderer.capabilities.getMaxAnisotropy();
-      o.hiTex = t; if (heldObj === o) useHi(); }, undefined, () => { o.hiLoading = false; });
+    const tries = [];
+    if (o.size[0] <= 16 && o.dec > -29) tries.push(['CDS/P/PanSTARRS/DR1/color', 'PanSTARRS DR1']);
+    tries.push(['CDS/P/DSS2/color', 'DSS2 colour']);
+    tries.push(['CDS/P/DESI-Legacy-Surveys/DR10/color', 'DESI Legacy DR10']);   // deeper but g/r/z renders galaxies teal: last resort
+    const usable = img => {                                           // reject no-coverage frames
+      const n = 48, c = document.createElement('canvas'); c.width = c.height = n;
+      const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0, n, n);
+      const d = g.getImageData(0, 0, n, n).data;
+      let white = 0, black = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+        if (v > 247) white++; else if (v < 3) black++;
+      }
+      const total = n * n;
+      return white / total < 0.3 && black / total < 0.97;
+    };
+    const tryNext = i => {
+      if (i >= tries.length) { o.hiLoading = false; return; }
+      const [hips, name] = tries[i];
+      const url = `https://alasky.cds.unistra.fr/hips-image-services/hips2fits?hips=${encodeURIComponent(hips)}&width=${px}&height=${py}&fov=${fovDeg}&projection=TAN&coordsys=icrs&ra=${o.ra}&dec=${o.dec}&format=jpg`;
+      loader.load(url, t => {
+        if (!usable(t.image)) { t.dispose(); tryNext(i + 1); return; }
+        t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter;
+        t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        o.hiTex = t; o.survey = [hips, name];
+        if (heldObj === o) useHi();
+      }, undefined, () => tryNext(i + 1));
+    };
+    tryNext(0);
   }
   for (const [k, col, op] of [[0, 0xffb05a, 0.95], [1, 0x1f2b44, 0.9]]) {    // bright inner frame, dark outer edge
     const ww = w + pad * 2 * k, hh = h + pad * 2 * k;
