@@ -651,7 +651,8 @@ function updateGuide(tms) {
   const sepDeg = Math.acos(Math.max(-1, Math.min(1, -v.z))) / DEG;
   const fovV = renderer.xr.isPresenting ? 85 : camera.fov, fovH = 2 * Math.atan(Math.tan(fovV / 2 * DEG) * (renderer.xr.isPresenting ? 1.1 : camera.aspect)) / DEG;
   const inView = sepDeg < 0.42 * Math.min(fovV, fovH);
-  guide.scale.setScalar(renderer.xr.isPresenting ? 1 : Math.max(0.35, fovV / 70));
+  const k = renderer.xr.isPresenting ? 1 : fovV / 70;                                // shrink the glyphs (not their distance) as the view narrows
+  chevron.scale.setScalar(k);
   hiRing.visible = inView; hiRing.material.opacity = 0.55 + 0.4 * Math.sin(tms / 180);
   guide.visible = !inView || sepDeg > 2;
   const D = 1.5, edge = D * Math.tan(0.36 * Math.min(fovV, fovH) * DEG);
@@ -664,11 +665,12 @@ function updateGuide(tms) {
     guideTextKey = key;
     if (guideText) { guide.remove(guideText); guideText.material.map.dispose(); }
     const turn = sepDeg < 2 ? 'on target — pull the trigger to bring it closer' : inView ? `${sepDeg.toFixed(0)}° away` : `turn ${Math.abs(dir.x) > Math.abs(dir.y) ? (dir.x > 0 ? 'right' : 'left') : (dir.y > 0 ? 'up' : 'down')}  ·  ${sepDeg.toFixed(0)}°`;
-    guideText = label([target.name, turn], '#ffb05a', 0.9, 56); guideText.scale.multiplyScalar(0.05);
+    guideText = label([target.name, turn], '#ffb05a', 0.9, 56); guideText.scale.multiplyScalar(0.05); guideText.userData.base = guideText.scale.clone();
     guide.add(guideText);
   }
+  guideText.scale.copy(guideText.userData.base).multiplyScalar(k);
   // text sits inside the chevron (towards the centre) when pointing, or just under the centre when the target is in view
-  guideText.position.set(inView ? 0 : dir.x * (rad - 0.22), inView ? -edge * 0.85 : dir.y * (rad - 0.22) - 0.1, -D);
+  guideText.position.set(inView ? 0 : dir.x * (rad - 0.22 * k), inView ? -edge * 0.85 : dir.y * (rad - 0.22 * k) - 0.1 * k, -D);
   if (!aligned && $('hudState')) $('hudState').textContent = 'Align on Polaris first for accurate guidance';
 }
 
@@ -724,6 +726,9 @@ addEventListener('wheel', e => setFov(camera.fov + e.deltaY * 0.03), { passive: 
 setCam();
 const qs = new URLSearchParams(location.search);
 if (qs.get('fov')) setFov(+qs.get('fov'));
+if (qs.get('only') === 'tiles') { labels.visible = false; constellations.visible = false; reticle.visible = false; horizon.visible = false; for (const c of sky.children) if (c.isSprite) c.visible = false; for (const o of OBJECTS) o.quad.visible = false; skyMat.uniforms.gain.value = 0; }
+if (qs.get('only') === 'both') { labels.visible = false; constellations.visible = false; horizon.visible = false; skyMat.uniforms.gain.value = 0; setTimeout(() => { const o = OBJECTS.find(x => x.des === 'M42'); loadTex(o); setTimeout(() => { o.quad.visible = true; o.quad.material.uniforms.feather.value = 0; o.quad.material.uniforms.gain.value = 0.6; }, 3000); }, 500); }
+if (qs.get('only') === 'marks') { labels.visible = false; constellations.visible = false; reticle.visible = false; horizon.visible = false; HIPS.enabled = false; $('regions').checked = false; skyMat.uniforms.gain.value = 0; for (const o of OBJECTS) o.quad.visible = false; }
 if (qs.get('tile')) { HIPS.layers.forEach(l => l.loadCone = 2); qs.get('tile').split(',').forEach(n => loadTile(HIPS.layers[1].tiles[+n], performance.now())); }   // test hook: order-3 tiles only
 if (qs.get('settings')) { $('drawer').hidden = false; $('settings').setAttribute('aria-expanded', 'true'); }
 if (qs.get('look')) setTimeout(() => { const v = qs.get('look'); const o = targetObj(v) || OBJECTS.find(x => x.des === v)?.quad; if (o) lookAt(o); }, 300);
