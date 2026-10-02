@@ -131,11 +131,11 @@
       <label><input id="hips" type="checkbox" checked> streamed DSS2 sky</label>
     </div>
     <div class="row"><span class="hint" id="xrhint">Checking WebXR…</span></div>
-    <div class="row"><span class="hint">Pick an object in the strip or click one; the arrow guides you. Drag to look · + / − or wheel to zoom (the sky resolves deeper as you go) · Return for the wide view · click an object to zoom to it · Track (T) follows it as the sky turns, on by default below 15° · A = align</span></div>
+    <div class="row"><span class="hint">Pick an object in the strip or click one; the arrow guides you. Drag to look · + / − or wheel to zoom (the sky resolves deeper as you go) · Return for the wide view · click an object to zoom to it · past 15° the sky freezes so nothing drifts (F toggles) · A = align</span></div>
   </section>
 </div>
 
-<div id="zoomer"><button id="zin" title="Zoom in (+)">+</button><span id="fovlbl" class="mono"></span><button id="zout" title="Zoom out (-)">−</button><button id="ztrk" title="Follow the selected object as the sky turns (T)">Track</button><button id="zret" title="Back to the wide view (Enter)">Return</button></div>
+<div id="zoomer"><button id="zin" title="Zoom in (+)">+</button><span id="fovlbl" class="mono"></span><button id="zout" title="Zoom out (-)">−</button><button id="ztrk" title="Freeze the sky so nothing drifts (F)">Sky live</button><button id="zret" title="Back to the wide view (Enter)">Return</button></div>
 <div id="stripbar"><input id="search" type="search" placeholder="Find an object (M, NGC, IC, name)…" autocomplete="off"><label><input id="upOnly" type="checkbox"> up now</label><span id="count" class="hint"></span></div>
 <div id="strip"></div>
 
@@ -586,7 +586,10 @@ reticle.position.z = -1.5; camera.add(reticle);
 // ---------------------------------------------------------------- astronomy
 const A = window.Astronomy;
 const observer = () => new A.Observer(lat, lon, 50);
-const nowT = () => new Date(Date.now() + toff * 3600e3);
+// When the view is zoomed past real scale it is no longer an AR view of the sky, so the diurnal rotation is
+// frozen and nothing drifts across the screen. At the wide, real-scale view the sky runs live as it should.
+let frozenAt = null;
+const nowT = () => new Date((frozenAt || Date.now()) + toff * 3600e3);
 const horToWorld = v => new THREE.Vector3(-v.y, v.z, -v.x);      // astronomy-engine HOR: x north, y west, z zenith
 function updateSky() {
   const t = A.MakeTime(nowT()), obs = observer();
@@ -603,7 +606,7 @@ function updateSky() {
   BODY.Sun.visible = bodyHor.Sun.altitude > -2;
   for (const p of PLANETS) BODY[p].visible = $('planets').checked && bodyHor[p].altitude > -2;
   placeLabels();
-  $('clock').textContent = `${nowT().toUTCString().slice(5, 25)} UTC`;
+  $('clock').textContent = `${nowT().toUTCString().slice(5, 25)} UTC${frozenAt ? '  (frozen)' : ''}`;
   updateStrip(); updateAlignState();
 }
 function altOf(obj) { const p = obj.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize(); return Math.asin(p.y) / DEG; }
@@ -752,7 +755,7 @@ addEventListener('keydown', e => {
   if (e.key === '+' || e.key === '=') zoom(1 / 1.6);
   if (e.key === '-' || e.key === '_') zoom(1.6);
   if (e.key === 'Enter' || e.key === '0') zoomReturn();
-  if (e.key.toLowerCase() === 't') setTracking(!tracking && !!target);
+  if (e.key.toLowerCase() === 'f') setFrozen(!frozenAt);
   if (e.key.toLowerCase() === 'a') alignOn(POLARIS); if (e.key === 'Escape') { if (heldObj) release(); else if (target) setTarget(target); } if (e.key.toLowerCase() === 'l' && target) lookAt(target.quad); });
 
 const hud = $('hud');
@@ -841,7 +844,7 @@ const BTN = new Map();
 for (const o of OBJECTS) {
   const b = document.createElement('button'); b.dataset.des = o.des;
   b.innerHTML = `<b>${o.name}</b><small>${o.name === o.des ? (TYPE_LABEL[o.type] || '') : o.des}${o.type ? ' · ' + (TYPE_LABEL[o.type] || o.type) : ''}</small>`;
-  b.onclick = () => { release(); if (target !== o) setTarget(o); lookAt(o.quad); setFov(Math.max(0.3, o.size[0] / 60 * 2.2)); setTracking(camera.fov < TRACK_FOV); };
+  b.onclick = () => { release(); if (target !== o) setTarget(o); lookAt(o.quad); setFov(Math.max(0.3, o.size[0] / 60 * 2.2)); setFrozen(camera.fov < TRACK_FOV); };
   b.ondblclick = () => { lookAt(o.quad); };
   BTN.set(o, b); $('strip').append(b);
 }
@@ -877,20 +880,22 @@ const setFov = f => {
 };
 // Progressive zoom: the sky itself resolves deeper as the field narrows (see the HiPS layers), so zooming in is
 // how you look closer at an object rather than opening a separate picture of it.
-// Tracking follows the selected object as the sky turns. It belongs to the desktop view only: in AR the overlay
-// must stay fixed to the real sky, so moving it would be exactly wrong. It switches itself on when the field
-// narrows past TRACK_FOV (where the 15 deg/hour drift starts to matter) and off again when you zoom back out,
-// and the button overrides either way.
+// The sky freezes once the field is narrower than this: beyond it the view is magnified past real scale, so
+// the 15 deg/hour rotation only shows up as the picture sliding off the screen. Never applies in AR, where the
+// overlay must keep matching the real sky.
 const TRACK_FOV = 15;
-let tracking = false;
-const setTracking = on => { tracking = on; $('ztrk').classList.toggle('on', on); };
+const setFrozen = on => {
+  frozenAt = on ? (frozenAt || Date.now()) : null;
+  $('ztrk').classList.toggle('on', on); $('ztrk').textContent = on ? 'Sky frozen' : 'Sky live';
+  updateSky();
+};
 function zoom(k) {
   if (renderer.xr.isPresenting) return;
   const was = camera.fov; setFov(camera.fov * k);
-  if (was >= TRACK_FOV && camera.fov < TRACK_FOV) setTracking(!!target);     // crossing in: follow it
-  if (was < TRACK_FOV && camera.fov >= TRACK_FOV) setTracking(false);        // crossing out: let go
+  if (was >= TRACK_FOV && camera.fov < TRACK_FOV) setFrozen(true);
+  if (was < TRACK_FOV && camera.fov >= TRACK_FOV) setFrozen(false);
 }
-function zoomReturn() { release(); if (target) setTarget(target); setTracking(false); setFov(70); }
+function zoomReturn() { release(); if (target) setTarget(target); setFrozen(false); setFov(70); }
 let drag = null, yawCam = 0, pitchCam = 20 * DEG;
 const setCam = () => { camera.rotation.set(0, 0, 0, 'YXZ'); camera.rotation.y = -yawCam; camera.rotation.x = pitchCam; };
 function lookAt(obj) {
@@ -901,11 +906,10 @@ $('lookBtn').onclick = () => lookAt(targetObj(POLARIS));
 renderer.domElement.addEventListener('pointerdown', e => { drag = [e.clientX, e.clientY, yawCam, pitchCam, false]; });
 // desktop: a click on an object selects it as the target; a double-click pulls it closer; clicking empty sky does nothing
 addEventListener('pointerup', e => {
-  if (drag && drag[4] && tracking) setTracking(false);                   // panning away releases the lock
   if (drag && !drag[4] && !renderer.xr.isPresenting && !phoneMode && e.target === renderer.domElement) {
     if (heldObj) release();
     else { const o = objectInView(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1));
-      if (o) { if (target !== o) setTarget(o); lookAt(o.quad); setFov(Math.max(0.3, Math.min(camera.fov, o.size[0] / 60 * 2.2))); setTracking(camera.fov < TRACK_FOV); } }
+      if (o) { if (target !== o) setTarget(o); lookAt(o.quad); setFov(Math.max(0.3, Math.min(camera.fov, o.size[0] / 60 * 2.2))); setFrozen(camera.fov < TRACK_FOV); } }
   }
   drag = null;
 });
@@ -919,8 +923,8 @@ addEventListener('pointermove', e => { if (!drag || renderer.xr.isPresenting || 
   yawCam = drag[2] + (e.clientX - drag[0]) * 0.0025 * camera.fov / 70; pitchCam = Math.max(-1.5, Math.min(1.5, drag[3] + (e.clientY - drag[1]) * 0.0025 * camera.fov / 70)); setCam(); });
 addEventListener('wheel', e => setFov(camera.fov * (e.deltaY > 0 ? 1.12 : 1 / 1.12)), { passive: true });
 $('zin').onclick = () => zoom(1 / 1.6); $('zout').onclick = () => zoom(1.6); $('zret').onclick = zoomReturn;
-$('ztrk').onclick = () => setTracking(!tracking && !!target);
-addEventListener('wheel', () => { if (camera.fov >= TRACK_FOV && tracking) setTracking(false); }, { passive: true });
+$('ztrk').onclick = () => setFrozen(!frozenAt);
+addEventListener('wheel', () => { const f = camera.fov < TRACK_FOV; if (f !== !!frozenAt) setFrozen(f); }, { passive: true });
 setCam();
 const qs = new URLSearchParams(location.search);
 if (qs.get('fov')) setFov(+qs.get('fov'));
@@ -1022,7 +1026,6 @@ renderer.setAnimationLoop(tms => {
   horizon.position.copy(eye); sky.matrix.setPosition(eye);        // sky and horizon ride with the eye: everything is at infinity
   // The sky really does rotate (15 deg/hour), so at a narrow field the view drifts off an object within a minute.
   // While an object is selected and the field is narrow, keep the view on it -- the same job a tracking mount does.
-  if (tracking && target && !drag && !heldObj && !renderer.xr.isPresenting && !phoneMode) lookAt(target.quad);
   if (!heldObj) updateGuide(tms);
   else if (!renderer.xr.isPresenting) {                            // the open view keeps its apparent size when the desktop zooms
     const k = camera.fov / 70; held.scale.setScalar(k); held.position.z = -1.2 * (1 - k);
