@@ -637,7 +637,14 @@ function dimSky(on) {
   for (const c of sky.children) if (c.isSprite) c.visible = !on;
   horizon.visible = !on;
 }
-function release() { if (!heldObj) return; held.scale.setScalar(1); held.position.z = 0; dimSky(false); reticle.visible = true; heldObj.quad.visible = true; labels.visible = true; if (target) showSelected(target, true); heldObj = null; held.visible = false; held.clear(); document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active')); }
+function release() {
+  if (!heldObj) return;
+  held.scale.setScalar(1); held.position.z = 0; dimSky(false); reticle.visible = true;
+  heldObj.quad.visible = true; labels.visible = true;
+  const was = target; heldObj = null; held.visible = false; held.clear();
+  if (was) setTarget(was);                         // closing also clears the selection, so no frame is left behind
+  document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active'));
+}
 const ray = new THREE.Raycaster();
 function objectInView(ndc) {                      // ndc: optional pointer position (desktop); default = the reticle
   sky.updateMatrixWorld(true);
