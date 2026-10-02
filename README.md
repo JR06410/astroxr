@@ -32,18 +32,27 @@ solves on the mount with plate solving and AstroXR will solve on the headset wit
   4096×2048 equirectangular map, sampled by direction in a shader and drawn additively so passthrough shows
   through the black sky.
 - **210 deep-sky objects**: the 13 featured cut-outs from `../DSO-vs-Moon` (5 px/arcmin, curated fields) plus a
-  library of ~200 — every Messier object, every sizeable NGC/IC nebula, a curated Sharpless set (Clamshell,
+  library of ~300 — every Messier object, every sizeable NGC/IC nebula, a curated Sharpless set (Clamshell,
   Flying Bat, Cave, Lobster Claw, Tulip, Spaghetti, Barnard's Loop…) and the brightest clusters/galaxies — selected from
   ScopeControl's OpenNGC catalogue by `tools/build_library.py` and fetched from hips2fits (DSS2 colour) with a
   field of 1.4× the catalogued major axis. Each is a quad whose angular size equals its field, north-up/east-left,
   labelled with name, designation, type and size. Search box and "up now" filter in the strip.
-- **Streamed DSS2 sky (HiPS)**: on the live site the whole sky is DSS2 colour, streamed as HEALPix tiles from
-  CDS — the tiles Aladin uses. Order 2 (192 tiles, 14.6°, 1.7′/px — finer than a headset shows) loads for the
-  whole sky within seconds and is kept; order 3 (7.3°, 0.86′/px) refines within 45° of the gaze and is dropped
-  far behind it, each coarse tile hiding once its four children are in. Tile geometry is the HEALPix nested
-  pixel → (face, x, y) → vector mapping (an 8×8 curved mesh per tile); the image orientation (column = HEALPix
-  y, row = x) was calibrated against M31, M42 and M13. Inside the claude.ai artifact the tiles are blocked by
-  its CSP, so the layer switches itself off and the bundled plates below take over.
+- **Streamed DSS2 sky (HiPS)**: the whole sky is DSS2 colour, streamed as the HEALPix tiles Aladin uses, at
+  **orders 2 to 8** (103″/px down to 1.6″/px) with the active orders following the field of view — so zooming in
+  resolves finer rather than magnifying. Only three levels are ever live: the order the view justifies, one below
+  it as backing while tiles arrive, and order 2 for the rest of the sky; a tile hides once all four of its
+  children are in. Deep tiles are discovered by walking the tree down from order 3 with a cone cull at each step
+  (order 8 has 786k tiles, so no registry is built, and subdividing only *loaded* parents would stall because the
+  intermediate orders are skipped). Load cones follow the field of view, and a click or zoom step prefetches at
+  once with a wider in-flight limit. Tile geometry is the HEALPix nested pixel → (face, x, y) → vector mapping,
+  an 8×8 curved mesh per tile; the image orientation (column = HEALPix y, row = x) was calibrated against M31,
+  M42 and M13.
+- **Plate artefacts**: DSS2 is photographic, so it carries satellite trails, emulsion scratches and dust. Its
+  colour comes from blue, red and near-IR plates exposed at *different times*, so an artefact lands in a single
+  channel and renders as a vividly saturated streak while real sky stays desaturated — the shader pulls extreme
+  chroma toward luminance, which suppresses them without any detection and without touching luminance. Toggle in
+  Settings. (Reliable trail detection needs a trained network or several exposures of the same sky; neither suits
+  a browser streaming tiles.)
 - **Regional survey plates**: 18 large DSS2 colour fields (Cygnus, Cepheus, Cassiopeia, Auriga, California,
   Orion, Monoceros, Sagittarius, Ophiuchus, Carina, the Magellanic Clouds…) at 1.5 px/arcmin, drawn under the
   cut-outs so nebulosity is continuous across the rich areas (`tools/build_regions.py`). Every plate and cut-out
@@ -53,7 +62,9 @@ solves on the mount with plate solving and AstroXR will solve on the headset wit
 - **Labels** follow what planetarium and map engines do: a budget tied to the field of view (wide views name only
   the famous things; narrow views open up), library names only near the reticle, biggest first; collision boxes
   on the text itself, placed in priority order with three candidate anchors (below, right, above); recently shown
-  labels keep priority and everything fades in/out, so nothing flickers; whatever the reticle is on is always named.
+  labels keep priority and everything fades in/out, so nothing flickers; whatever the reticle is on is always
+  named. Both the text size **and every offset** scale with the field of view — a fixed angular offset is a few
+  pixels at 70° but most of the screen at 1°, which leaves zoomed-in names stranded away from their objects.
 - **Moon and Sun**: dashed 30′ rings at the topocentric position from
   [astronomy-engine](https://github.com/cosinekitty/astronomy); the Sun ring hides below the horizon.
 - **Bright stars and planets**: ~50 named stars (Hipparcos, J2000) and the five naked-eye planets as markers,
@@ -62,16 +73,24 @@ solves on the mount with plate solving and AstroXR will solve on the headset wit
   it never moves, so one alignment holds all night, and its altitude equals your latitude. It carries a standing
   orange ring; put the reticle on the real star and pull the trigger / pinch / press Align, and the sky rotates
   so the computed Polaris lands on it. The top bar shows "Aligned on Polaris · 3 min ago" and nags after 10 min.
-- **Selection and guidance**: pick an object in the strip, by search, or by clicking it (desktop). It is framed
-  by a bright double outline with its own cut-out shown solid inside, so the selection is unmistakable; a chevron
-  at the edge of the view points the way to turn with the angle left ("turn down · 48°"); within 2° you are on
-  target and the trigger (desktop: double-click) pulls it closer. `L` turns the desktop view onto the target.
-- **Open an object**: click it (headset: look at it and pull the trigger) and it opens as a framed photograph in
-  front of you — a tight field (1.15x the object) fetched at full resolution from hips2fits, PanSTARRS DR1 for
-  objects under 16' north of -29 deg and DSS2 colour otherwise, on an opaque backing inside a bright frame, with
-  the sky behind dimmed to a tenth. The card gives name, designation, size, field and magnification. Click again
-  or Esc to close. (Curated press imagery from the WorldWide Telescope study collections was tried and reverted:
-  coverage and framing were too inconsistent object to object — see git history for the builder.)
+- **Selection and progressive zoom**: pick an object in the strip, by search, by clicking it, or by clicking its
+  **name** — every route behaves the same. The view turns to it and zooms to frame it; **+ / − / Return** (and the
+  same keys, plus the wheel) drive the zoom from there, with the current field shown between them. The hit test
+  picks the *smallest* object whose own extent contains the click, not the first quad the ray meets, so a click on
+  empty sky near M31 does not select M31; clicking an object already chosen steps the zoom in, and empty sky,
+  Return or Esc clears. A chevron at the edge of the view points the way to an off-screen target.
+- **The sky freezes past a 15° field**, because beyond that the view is magnified past real scale and the sky's
+  15°/hour rotation only shows as the picture sliding off screen. Button (and `F`) overrides; the clock says when
+  it is frozen; never applies in AR, where the overlay must keep matching the real sky.
+- **Imagery is natural colour**, since the point is to show the sky as it looks: PanSTARRS DR1 where it is
+  sharper (objects under 16′, north of dec −29) and DSS2 colour otherwise, each candidate checked for usable
+  pixels first because hips2fits returns a blank frame outside a survey's footprint. Researched and rejected:
+  **DESI Legacy DR10** is deeper but its g/r/z composite renders galaxies teal; the **NSNS narrowband survey**
+  (65% of sky, CC BY-NC-SA) shows far more nebula structure and M82's Hα outflow, but in an [OIII]/Hα/[SII]
+  palette rather than true colour. M82's red cannot appear in any broadband survey — it is line emission.
+  Curated press imagery from the **AAS WorldWide Telescope** study collections was also tried and reverted:
+  coverage and framing varied too much object to object (builder in git history; note WWT's amateur
+  "astrophoto" collection is All Rights Reserved).
 - **Horizon and N/E/S/W** cue in the gravity-aligned frame; sky-brightness slider for light-polluted passthrough.
 - **Desktop UI**: slim top bar (Enter AR, alignment state), collapsible settings drawer, object strip along the
   bottom (dimmed when below the horizon), drag to look, wheel to zoom, `A` to align, `?look=`/`?hold=`/`?fov=` URL
