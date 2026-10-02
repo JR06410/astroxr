@@ -66,9 +66,11 @@ solves on the mount with plate solving and AstroXR will solve on the headset wit
   by a bright double outline with its own cut-out shown solid inside, so the selection is unmistakable; a chevron
   at the edge of the view points the way to turn with the angle left ("turn down · 48°"); within 2° you are on
   target and the trigger (desktop: double-click) pulls it closer. `L` turns the desktop view onto the target.
-- **Pull it closer**: look at an object and pull the trigger (desktop: click it or its chip) and it comes forward
-  to 1.2 m, magnified to a 32° field, with a Moon disc at the *same* magnification and a card giving size,
-  Moon diameters and the magnification. Trigger/Esc releases it.
+- **Open an object**: click it (headset: look at it and pull the trigger) and it opens as a framed photograph in
+  front of you — a tight field (1.15x the object) fetched at full resolution from hips2fits, PanSTARRS DR1 for
+  objects under 16' north of -29 deg and DSS2 colour otherwise, on an opaque backing inside a bright frame, with the
+  sky behind dimmed to a tenth. The card gives name, designation, size, the field in degrees, the survey and the
+  magnification. Click again or Esc to close.
 - **Horizon and N/E/S/W** cue in the gravity-aligned frame; sky-brightness slider for light-polluted passthrough.
 - **Desktop UI**: slim top bar (Enter AR, alignment state), collapsible settings drawer, object strip along the
   bottom (dimmed when below the horizon), drag to look, wheel to zoom, `A` to align, `?look=`/`?hold=`/`?fov=` URL

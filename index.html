@@ -583,36 +583,57 @@ $('resetYaw').onclick = () => { yaw = 0; aligned = null; store('yaw', 0); store(
 // ---------------------------------------------------------------- pull an object closer
 const held = new THREE.Group(); camera.add(held); held.visible = false;
 let heldObj = null;
-const moonDisc = new THREE.Mesh(new THREE.CircleGeometry(1, 64), new THREE.MeshBasicMaterial({ color: 0xd9d4c7 }));
 function hold(o) {
   loadTex(o); held.clear(); heldObj = o;
-  const D = 1.2, span = 32 * DEG;                                    // the cut-out fills 32 degrees at 1.2 m
-  const mag = span / (o.field[0] * ARCMIN);                          // magnification relative to the real sky
+  // The opened view is a framed photograph: a tight DSS2 field (1.15x the object) at full resolution on an opaque
+  // backing, inside a bright frame, so it is unmistakably an overlay and nothing shows through it.
+  const D = 1.2, span = 26 * DEG;
+  const fovDeg = Math.max(0.1, o.size[0] * 1.15 / 60);                // field actually shown (degrees)
+  const mag = span / (fovDeg * DEG);
   const w = 2 * D * Math.tan(span / 2), h = w * o.field[1] / o.field[0];
-  // the expanded view gets its own solid material: the bundled cut-out at once, then a higher-resolution image of
-  // the same field from hips2fits when the host allows cross-origin images (PanSTARRS for small fields, DSS2 above)
-  const mat = surveyMaterial(); mat.blending = THREE.NormalBlending; mat.uniforms.feather.value = 0; mat.uniforms.gain.value = 1.0;
-  const src = o.quad.material.uniforms; mat.uniforms.map.value = src.map.value; mat.uniforms.black.value.copy(src.black.value);
+  const pad = w * 0.035;
+  const backing = new THREE.Mesh(new THREE.PlaneGeometry(w + pad * 2, h + pad * 2),
+    new THREE.MeshBasicMaterial({ color: 0x05070d, depthWrite: false }));
+  backing.position.set(0, 0.12, -D - 0.004); held.add(backing);
+  const mat = new THREE.MeshBasicMaterial({ map: o.quad.material.uniforms.map.value, depthWrite: false, toneMapped: false });
   const q = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat); q.position.set(0, 0.12, -D); held.add(q);
-  if (!src.map.value) loadTex(o);
-  if (o.hiTex) { mat.uniforms.map.value = o.hiTex; mat.uniforms.black.value.copy(o.hiBlack); }
+  // until the tight image arrives, the wide bundled cut-out stands in, scaled so the object is the same size
+  if (!o.quad.material.uniforms.map.value) loadTex(o);
+  q.scale.setScalar(o.field[0] / 60 / fovDeg);
+  const useHi = () => { mat.map = o.hiTex; mat.needsUpdate = true; q.scale.setScalar(1); if (heldObj === o) { held.remove(card); held.add(card = label([o.name, `${o.des}  ·  ${o.dims}`, `${fovDeg.toFixed(2)}° field · ${o.survey[1]} · magnified ×${mag.toFixed(0)}`], '#e8ecf4', 0.9, 56)); card.scale.multiplyScalar(0.065); card.position.set(0, -h / 2 - 0.06, -D); } };
+  let card;
+  if (o.hiTex) useHi();
   else if (HIPS.enabled && !o.hiLoading) {
     o.hiLoading = true;
-    const fov = o.field[0] / 60, px = 1400, py = Math.round(px * o.field[1] / o.field[0]);
-    const survey = (o.field[0] <= 45 && o.dec > -29) ? 'CDS/P/PanSTARRS/DR1/color' : 'CDS/P/DSS2/color';
-    const url = `https://alasky.cds.unistra.fr/hips-image-services/hips2fits?hips=${encodeURIComponent(survey)}&width=${px}&height=${py}&fov=${fov}&projection=TAN&coordsys=icrs&ra=${o.ra}&dec=${o.dec}&format=jpg`;
-    loader.load(url, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter;
-      const b = skyLevel(t.image); o.hiTex = t; o.hiBlack = new THREE.Vector3(b[0], b[1], b[2]);
-      if (heldObj === o) { mat.uniforms.map.value = t; mat.uniforms.black.value.copy(o.hiBlack); } }, undefined, () => { o.hiLoading = false; });
+    const px = 1600, py = Math.round(px * o.field[1] / o.field[0]);
+    o.survey = (o.size[0] <= 16 && o.dec > -29) ? ['CDS/P/PanSTARRS/DR1/color', 'PanSTARRS DR1'] : ['CDS/P/DSS2/color', 'DSS2 colour'];
+    const url = `https://alasky.cds.unistra.fr/hips-image-services/hips2fits?hips=${encodeURIComponent(o.survey[0])}&width=${px}&height=${py}&fov=${fovDeg}&projection=TAN&coordsys=icrs&ra=${o.ra}&dec=${o.dec}&format=jpg`;
+    loader.load(url, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      o.hiTex = t; if (heldObj === o) useHi(); }, undefined, () => { o.hiLoading = false; });
   }
-  const md = D * Math.tan(30 * ARCMIN * mag / 2); moonDisc.scale.set(md, md, 1); moonDisc.position.set(w / 2 + md + 0.06, -h / 2 + md + 0.12, -D); held.add(moonDisc);
-  const card = label([o.name, `${o.des}  ·  ${o.dims}`, `magnified ×${mag.toFixed(0)} — Moon shown at the same magnification`], '#e8ecf4', 0.9, 56);
+  for (const [k, col, op] of [[0, 0xffb05a, 0.95], [1, 0x1f2b44, 0.9]]) {    // bright inner frame, dark outer edge
+    const ww = w + pad * 2 * k, hh = h + pad * 2 * k;
+    const pts = [new THREE.Vector3(-ww / 2, -hh / 2, 0), new THREE.Vector3(ww / 2, -hh / 2, 0), new THREE.Vector3(ww / 2, hh / 2, 0), new THREE.Vector3(-ww / 2, hh / 2, 0)];
+    const l = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: op, depthTest: false }));
+    l.position.set(0, 0.12, -D + 0.002); held.add(l);
+  }
+  card = label([o.name, `${o.des}  ·  ${o.dims}`, `${(fovDeg).toFixed(2)}° field · ${(o.survey || ['', 'DSS2 colour'])[1]} · magnified ×${mag.toFixed(0)}`], '#e8ecf4', 0.9, 56);
   card.scale.multiplyScalar(0.065); card.position.set(0, -h / 2 - 0.06, -D); held.add(card);
-  const ml = label(['Moon'], '#ffe6be', 0.6, 48); ml.scale.multiplyScalar(0.045); ml.position.set(moonDisc.position.x, moonDisc.position.y - md - 0.05, -D); held.add(ml);
-  held.visible = true; o.quad.visible = false; labels.visible = false; guide.visible = false; hiRing.visible = false; frame.visible = false;
+  held.visible = true; reticle.visible = false; o.quad.visible = false; labels.visible = false; guide.visible = false; hiRing.visible = false; frame.visible = false;
   document.querySelectorAll('#strip button').forEach(b => b.classList.toggle('active', b.dataset.des === o.des));
+  dimSky(true);
 }
-function release() { if (!heldObj) return; held.scale.setScalar(1); held.position.z = 0; heldObj.quad.visible = true; labels.visible = true; if (target) showSelected(target, true); heldObj = null; held.visible = false; held.clear(); document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active')); }
+// while an object is open the sky behind it dims to a tenth, so the photograph reads on its own
+function dimSky(on) {
+  const k = on ? 0.1 : 1;
+  skyMat.uniforms.gain.value = (on ? 0.1 : 1) * +$('gain').value;
+  for (const t of HIPS.loaded) t.mesh.material.uniforms.gain.value = HIPS.gain * k * +$('gain').value;
+  for (const r of REGIONS) r.quad.material.uniforms.gain.value = 2.2 * k * +$('gain').value;
+  constellations.visible = !on && $('cons').checked;
+  for (const c of sky.children) if (c.isSprite) c.visible = !on;
+  horizon.visible = !on;
+}
+function release() { if (!heldObj) return; held.scale.setScalar(1); held.position.z = 0; dimSky(false); reticle.visible = true; heldObj.quad.visible = true; labels.visible = true; if (target) showSelected(target, true); heldObj = null; held.visible = false; held.clear(); document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active')); }
 const ray = new THREE.Raycaster();
 function objectInView(ndc) {                      // ndc: optional pointer position (desktop); default = the reticle
   sky.updateMatrixWorld(true);
