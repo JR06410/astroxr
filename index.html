@@ -738,12 +738,35 @@ function release() {
   document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active'));
 }
 const ray = new THREE.Raycaster();
-function objectInView(ndc) {                      // ndc: optional pointer position (desktop); default = the reticle
+// What is being pointed at: the SMALLEST object whose own extent contains the direction, not the first quad the
+// ray happens to meet. The quads are padded fields (M31's is 3.4 deg across), so testing those would let a click
+// on empty sky pick a big neighbour, and overlapping fields would resolve arbitrarily.
+function objectInView(ndc) {                      // ndc: pointer position (desktop); default = the reticle
   sky.updateMatrixWorld(true);
   if (ndc) ray.setFromCamera(ndc, camera); else ray.set(eyeOf(), fwdOf());
-  const hit = ray.intersectObjects(OBJECTS.map(o => o.quad), false)[0];
-  return hit ? hit.object.userData.obj : null;
+  const dir = ray.ray.direction.clone().normalize(), eye = ray.ray.origin;
+  const fov = renderer.xr.isPresenting ? 90 : camera.fov;
+  const slack = Math.max(0.015 * fov, 0.04);      // small objects stay clickable at any zoom
+  let best = null;
+  for (const o of OBJECTS) {
+    const d = o.quad.getWorldPosition(new THREE.Vector3()).sub(eye).normalize();
+    const sep = Math.acos(Math.min(1, Math.max(-1, d.dot(dir)))) / DEG;
+    if (sep <= Math.max(o.size[0], o.size[1]) / 120 + slack && (!best || o.size[0] < best.size[0])) best = o;
+  }
+  return best;
 }
+// One way in for every selection, so the strip, the sky and the search all behave alike. Unlike setTarget this
+// never toggles: picking an object always selects it, and clearing is Return, Esc or a click on empty sky.
+function selectObject(o) {
+  if (target && target !== o) showSelected(target, false);
+  if (target !== o) { target = o; showSelected(o, true); }
+  document.querySelectorAll('#strip button').forEach(b => b.classList.toggle('active', b.dataset.des === o.des));
+  hiRing.visible = false; guide.visible = false; guideTextKey = '';
+  lookAt(o.quad);
+  setFov(Math.max(0.3, o.size[0] / 60 * 2.2));    // frame it with a little room around
+  setFrozen(camera.fov < TRACK_FOV);
+}
+function clearSelection() { if (target) { showSelected(target, false); target = null; document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active')); guide.visible = false; } }
 function select() {                              // trigger / pinch / click: grab what you're looking at, else align
   if (heldObj) return release();
   const o = objectInView();
@@ -756,7 +779,7 @@ addEventListener('keydown', e => {
   if (e.key === '-' || e.key === '_') zoom(1.6);
   if (e.key === 'Enter' || e.key === '0') zoomReturn();
   if (e.key.toLowerCase() === 'f') setFrozen(!frozenAt);
-  if (e.key.toLowerCase() === 'a') alignOn(POLARIS); if (e.key === 'Escape') { if (heldObj) release(); else if (target) setTarget(target); } if (e.key.toLowerCase() === 'l' && target) lookAt(target.quad); });
+  if (e.key.toLowerCase() === 'a') alignOn(POLARIS); if (e.key === 'Escape') { if (heldObj) release(); else clearSelection(); } if (e.key.toLowerCase() === 'l' && target) lookAt(target.quad); });
 
 const hud = $('hud');
 
@@ -844,7 +867,7 @@ const BTN = new Map();
 for (const o of OBJECTS) {
   const b = document.createElement('button'); b.dataset.des = o.des;
   b.innerHTML = `<b>${o.name}</b><small>${o.name === o.des ? (TYPE_LABEL[o.type] || '') : o.des}${o.type ? ' · ' + (TYPE_LABEL[o.type] || o.type) : ''}</small>`;
-  b.onclick = () => { release(); if (target !== o) setTarget(o); lookAt(o.quad); setFov(Math.max(0.3, o.size[0] / 60 * 2.2)); setFrozen(camera.fov < TRACK_FOV); };
+  b.onclick = () => { release(); selectObject(o); };
   b.ondblclick = () => { lookAt(o.quad); };
   BTN.set(o, b); $('strip').append(b);
 }
@@ -895,7 +918,7 @@ function zoom(k) {
   if (was >= TRACK_FOV && camera.fov < TRACK_FOV) setFrozen(true);
   if (was < TRACK_FOV && camera.fov >= TRACK_FOV) setFrozen(false);
 }
-function zoomReturn() { release(); if (target) setTarget(target); setFrozen(false); setFov(70); }
+function zoomReturn() { release(); clearSelection(); setFrozen(false); setFov(70); }
 let drag = null, yawCam = 0, pitchCam = 20 * DEG;
 const setCam = () => { camera.rotation.set(0, 0, 0, 'YXZ'); camera.rotation.y = -yawCam; camera.rotation.x = pitchCam; };
 function lookAt(obj) {
@@ -908,8 +931,12 @@ renderer.domElement.addEventListener('pointerdown', e => { drag = [e.clientX, e.
 addEventListener('pointerup', e => {
   if (drag && !drag[4] && !renderer.xr.isPresenting && !phoneMode && e.target === renderer.domElement) {
     if (heldObj) release();
-    else { const o = objectInView(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1));
-      if (o) { if (target !== o) setTarget(o); lookAt(o.quad); setFov(Math.max(0.3, Math.min(camera.fov, o.size[0] / 60 * 2.2))); setFrozen(camera.fov < TRACK_FOV); } }
+    else {
+      const o = objectInView(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1));
+      if (!o) clearSelection();                   // a click on empty sky lets go
+      else if (o === target) zoom(1 / 1.6);       // already chosen: step closer rather than dropping it
+      else selectObject(o);
+    }
   }
   drag = null;
 });
@@ -934,7 +961,7 @@ if (qs.get('only') === 'marks') { labels.visible = false; constellations.visible
 if (qs.get('tile')) { HIPS.layers.forEach(l => l.loadCone = 2); qs.get('tile').split(',').forEach(n => loadTile(HIPS.layers[1].byIp.get(+n), performance.now())); }   // test hook: order-3 tiles only
 if (qs.get('settings')) { $('drawer').hidden = false; $('settings').setAttribute('aria-expanded', 'true'); }
 if (qs.get('look')) setTimeout(() => { const v = qs.get('look'); const o = targetObj(v) || OBJECTS.find(x => x.des === v)?.quad; if (o) lookAt(o); }, 300);
-if (qs.get('target')) setTimeout(() => { const o = OBJECTS.find(x => x.des === qs.get('target')); if (o) setTarget(o); }, 300);
+if (qs.get('target')) setTimeout(() => { const o = OBJECTS.find(x => x.des === qs.get('target')); if (o) selectObject(o); }, 300);
 if (qs.get('hold')) setTimeout(() => { const o = OBJECTS.find(x => x.des === qs.get('hold')); if (o) { lookAt(o.quad); if (qs.get('select')) setTarget(o); hold(o); if (qs.get('release')) setTimeout(release, 1500); } }, 300);
 
 // ---------------------------------------------------------------- Phone AR (magic window)
@@ -1026,6 +1053,8 @@ renderer.setAnimationLoop(tms => {
   horizon.position.copy(eye); sky.matrix.setPosition(eye);        // sky and horizon ride with the eye: everything is at infinity
   // The sky really does rotate (15 deg/hour), so at a narrow field the view drifts off an object within a minute.
   // While an object is selected and the field is narrow, keep the view on it -- the same job a tracking mount does.
+  // the selection frame marks where an object is; once the view is inside it it only shows as stray lines
+  if (frame.visible !== false && target) frame.visible = camera.fov > target.field[0] / 60 * 1.3 || renderer.xr.isPresenting;
   if (!heldObj) updateGuide(tms);
   else if (!renderer.xr.isPresenting) {                            // the open view keeps its apparent size when the desktop zooms
     const k = camera.fov / 70; held.scale.setScalar(k); held.position.z = -1.2 * (1 - k);
