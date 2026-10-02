@@ -388,7 +388,7 @@ FEATURED.forEach(loadTex);
 // Needs a host without a restrictive CSP (GitHub Pages); inside the claude.ai artifact the first tile fails and
 // the layer switches itself off, leaving the plates and cut-outs.
 const HIPS = {
-  base: 'https://alasky.cds.unistra.fr/DSS/DSSColor', G: 8, maxInflight: 8, enabled: true, failed: 0, gain: 2.2, loaded: new Set(),
+  base: 'https://alasky.cds.unistra.fr/DSS/DSSColor', G: 8, maxInflight: 6, enabled: true, failed: 0, gain: 2.2, loaded: new Set(),
   // two layers: order 2 (192 tiles, 14.6 deg, 1.7'/px) covers the whole sky quickly and is kept; order 3 refines
   // around the gaze and is dropped again far behind it. A coarse tile hides once its four children are in.
   // Orders 2..8 of the same pyramid (a tile spans 58.6/2^order degrees, 512 px, so order 2 is 103"/px and
@@ -458,35 +458,43 @@ function updateHips(fwd, now) {
   if (!HIPS.enabled) return;
   skyInv.setFromMatrix4(sky.matrixWorld).invert();                     // gaze in the sky's own (equatorial) frame
   const g = fwd.clone().applyMatrix3(skyInv).normalize();
-  // the deepest order worth loading: aim for a tile roughly a third of the view across (58.6/2^order deg per tile)
   const fov = renderer.xr.isPresenting ? 90 : camera.fov;
   HIPS.maxOrder = Math.max(2, Math.min(8, Math.round(Math.log2(58.6 / Math.max(0.12, fov / 3)))));
+  // Only three levels are ever active: the order the view justifies, one below it as backing while tiles arrive,
+  // and order 2 for the rest of the sky. The intermediate orders are skipped entirely -- at a 1 degree field there
+  // is nothing to gain from a sheet of order-5 tiles under the order-8 ones.
+  const active = new Set([2, Math.max(2, HIPS.maxOrder - 1), HIPS.maxOrder]);
   const want = [];
   for (const layer of HIPS.layers) {
-    if (layer.order > HIPS.maxOrder) continue;
-    if (layer.order <= 3) {                                            // enumerated orders: scan them directly
-      for (const t of layer.tiles) {
-        const d = t.centre.dot(g);
-        if (t.tex) { if (d > layer.dropCone) t.last = now; }
-        else if (d > layer.loadCone) want.push([d + (4 - layer.order) * 0.5, t]);   // coarse first, so something shows at once
+    if (!active.has(layer.order)) continue;
+    // load only what is near the view: a cone that follows the field of view rather than a fixed per-layer radius,
+    // which at a 0.3 degree field was fetching fifty times more sky than could be seen
+    const tileDeg = 58.6 / (1 << layer.order);
+    const load = layer.order === 2 ? -1 : Math.cos(Math.min(75, fov * 0.75 + tileDeg) * DEG);
+    const drop = layer.order === 2 ? -1 : Math.cos(Math.min(90, fov * 1.6 + tileDeg * 2) * DEG);
+    const scan = layer.order <= 3 ? layer.tiles : null;
+    const visit = t => {
+      const d = t.centre.dot(g);
+      if (t.tex) { if (d > drop) t.last = now; }
+      else if (d > load) want.push([d + (4 - layer.order) * 0.5, t]);   // coarser first, so something shows at once
+    };
+    if (scan) scan.forEach(visit);
+    else {
+      // Walk the tree down from order 3 to this order, culling to the cone at every step. Subdividing only the
+      // tiles already loaded below would stall here, because the intermediate orders are deliberately skipped.
+      let ips = HIPS.layers[1].tiles.filter(t => t.centre.dot(g) > Math.cos(Math.min(88, fov * 1.5 + 7.3) * DEG)).map(t => t.ip);
+      for (let ord = 4; ord <= layer.order && ips.length; ord++) {
+        const L = HIPS.layers[ord - 2], cone = Math.cos(Math.min(85, fov * 0.75 + 58.6 / (1 << ord)) * DEG), next = [];
+        for (const ip of ips) for (let k = 0; k < 4; k++) { const t = tileAt(L, ip * 4 + k); if (t.centre.dot(g) > cone) next.push(t.ip); }
+        ips = next;
       }
-    } else {                                                           // deep orders: subdivide the loaded parents
-      const parent = HIPS.layers[layer.order - 3];                     // layers[] is indexed from order 2
-      for (const p of parent.tiles) {
-        if (!p.mesh) continue;
-        for (let k = 0; k < 4; k++) {
-          const t = tileAt(layer, p.ip * 4 + k);
-          const d = t.centre.dot(g);
-          if (t.tex) { if (d > layer.dropCone) t.last = now; }
-          else if (d > layer.loadCone) want.push([d + (4 - layer.order) * 0.5, t]);
-        }
-      }
+      for (const ip of ips) visit(tileAt(layer, ip));
     }
   }
   want.sort((a, b) => b[0] - a[0]);
   for (const [, t] of want) { if (HIPS.inflight >= HIPS.maxInflight) break; loadTile(t, now); }
   for (const layer of HIPS.layers) {
-    const cap = layer.order > HIPS.maxOrder ? 0 : layer.maxLoaded;     // orders the view no longer needs are released
+    const cap = active.has(layer.order) ? layer.maxLoaded : 0;         // levels the view no longer uses are released
     const have = layer.tiles.filter(t => t.mesh);
     if (have.length > cap) {
       for (const t of have.sort((a, b) => a.last - b.last).slice(0, have.length - cap)) {
@@ -502,7 +510,7 @@ function refreshParent(t) {                        // a tile hides once all four
   const parent = HIPS.layers[t.layer.order - 3].byIp.get(Math.floor(t.ip / 4));
   if (!parent || !parent.mesh) return;
   const kids = [0, 1, 2, 3].map(k => t.layer.byIp.get(parent.ip * 4 + k));
-  parent.mesh.visible = $('hips').checked && !kids.every(k => k && k.mesh);
+  parent.mesh.visible = $('hips').checked && !kids.every(k => k && k.mesh && k.mesh.visible);
   refreshParent(parent);
 }
 function loadTile(t, now) {
@@ -771,6 +779,7 @@ function selectObject(o) {
   lookAt(o.quad);
   setFov(Math.max(0.3, o.size[0] / 60 * 2.2));    // frame it with a little room around
   setFrozen(camera.fov < TRACK_FOV);
+  prefetch();                                      // the destination is known the moment you click: start fetching now
 }
 function clearSelection() { if (target) { showSelected(target, false); target = null; document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active')); guide.visible = false; } }
 function select() {                              // trigger / pinch / click: grab what you're looking at, else align
@@ -907,9 +916,20 @@ const setFrozen = on => {
   $('ztrk').classList.toggle('on', on); $('ztrk').textContent = on ? 'Sky frozen' : 'Sky live';
   updateSky();
 };
+// A click or a zoom step settles the view instantly, so the tiles it needs can be asked for in the same breath
+// rather than waiting up to 250 ms for the next pass. The burst widens the in-flight limit briefly so the first
+// screenful arrives together instead of trickling.
+function prefetch() {
+  if (!HIPS.enabled || renderer.xr.isPresenting) return;
+  sky.updateMatrixWorld(true);
+  const was = HIPS.maxInflight; HIPS.maxInflight = 16;
+  updateHips(fwdOf(), performance.now());
+  HIPS.maxInflight = was;
+}
 function zoom(k) {
   if (renderer.xr.isPresenting) return;
   const was = camera.fov; setFov(camera.fov * k);
+  prefetch();
   if (was >= TRACK_FOV && camera.fov < TRACK_FOV) setFrozen(true);
   if (was < TRACK_FOV && camera.fov >= TRACK_FOV) setFrozen(false);
 }
@@ -943,7 +963,7 @@ renderer.domElement.addEventListener('dblclick', e => {
 addEventListener('pointermove', e => { if (!drag || renderer.xr.isPresenting || phoneMode) return;
   if (Math.hypot(e.clientX - drag[0], e.clientY - drag[1]) > 4) drag[4] = true;
   yawCam = drag[2] + (e.clientX - drag[0]) * 0.0025 * camera.fov / 70; pitchCam = Math.max(-1.5, Math.min(1.5, drag[3] + (e.clientY - drag[1]) * 0.0025 * camera.fov / 70)); setCam(); });
-addEventListener('wheel', e => setFov(camera.fov * (e.deltaY > 0 ? 1.12 : 1 / 1.12)), { passive: true });
+addEventListener('wheel', e => { setFov(camera.fov * (e.deltaY > 0 ? 1.12 : 1 / 1.12)); prefetch(); }, { passive: true });
 $('zin').onclick = () => zoom(1 / 1.6); $('zout').onclick = () => zoom(1.6); $('zret').onclick = zoomReturn;
 $('ztrk').onclick = () => setFrozen(!frozenAt);
 addEventListener('wheel', () => { const f = camera.fov < TRACK_FOV; if (f !== !!frozenAt) setFrozen(f); }, { passive: true });
