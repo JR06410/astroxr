@@ -124,7 +124,7 @@
       <label><input id="hips" type="checkbox" checked> streamed DSS2 sky</label>
     </div>
     <div class="row"><span class="hint" id="xrhint">Checking WebXR…</span></div>
-    <div class="row"><span class="hint">Pick an object in the strip or click one; the arrow guides you. Drag · wheel zoom (0 = 70°) · double-click = pull closer · L = turn to target · A = align · Esc</span></div>
+    <div class="row"><span class="hint">Pick an object in the strip or click one; the arrow guides you. Drag · wheel zoom (0 = 70°) · click an object = open it large · L = turn to target · A = align · Esc</span></div>
   </section>
 </div>
 
@@ -589,15 +589,30 @@ function hold(o) {
   const D = 1.2, span = 32 * DEG;                                    // the cut-out fills 32 degrees at 1.2 m
   const mag = span / (o.field[0] * ARCMIN);                          // magnification relative to the real sky
   const w = 2 * D * Math.tan(span / 2), h = w * o.field[1] / o.field[0];
-  const q = new THREE.Mesh(new THREE.PlaneGeometry(w, h), o.quad.material); q.position.set(0, 0.05, -D); held.add(q);
-  const md = D * Math.tan(30 * ARCMIN * mag / 2); moonDisc.scale.set(md, md, 1); moonDisc.position.set(w / 2 + md + 0.06, -h / 2 + md, -D); held.add(moonDisc);
+  // the expanded view gets its own solid material: the bundled cut-out at once, then a higher-resolution image of
+  // the same field from hips2fits when the host allows cross-origin images (PanSTARRS for small fields, DSS2 above)
+  const mat = surveyMaterial(); mat.blending = THREE.NormalBlending; mat.uniforms.feather.value = 0; mat.uniforms.gain.value = 1.0;
+  const src = o.quad.material.uniforms; mat.uniforms.map.value = src.map.value; mat.uniforms.black.value.copy(src.black.value);
+  const q = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat); q.position.set(0, 0.12, -D); held.add(q);
+  if (!src.map.value) loadTex(o);
+  if (o.hiTex) { mat.uniforms.map.value = o.hiTex; mat.uniforms.black.value.copy(o.hiBlack); }
+  else if (HIPS.enabled && !o.hiLoading) {
+    o.hiLoading = true;
+    const fov = o.field[0] / 60, px = 1400, py = Math.round(px * o.field[1] / o.field[0]);
+    const survey = (o.field[0] <= 45 && o.dec > -29) ? 'CDS/P/PanSTARRS/DR1/color' : 'CDS/P/DSS2/color';
+    const url = `https://alasky.cds.unistra.fr/hips-image-services/hips2fits?hips=${encodeURIComponent(survey)}&width=${px}&height=${py}&fov=${fov}&projection=TAN&coordsys=icrs&ra=${o.ra}&dec=${o.dec}&format=jpg`;
+    loader.load(url, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter;
+      const b = skyLevel(t.image); o.hiTex = t; o.hiBlack = new THREE.Vector3(b[0], b[1], b[2]);
+      if (heldObj === o) { mat.uniforms.map.value = t; mat.uniforms.black.value.copy(o.hiBlack); } }, undefined, () => { o.hiLoading = false; });
+  }
+  const md = D * Math.tan(30 * ARCMIN * mag / 2); moonDisc.scale.set(md, md, 1); moonDisc.position.set(w / 2 + md + 0.06, -h / 2 + md + 0.12, -D); held.add(moonDisc);
   const card = label([o.name, `${o.des}  ·  ${o.dims}`, `magnified ×${mag.toFixed(0)} — Moon shown at the same magnification`], '#e8ecf4', 0.9, 56);
-  card.scale.multiplyScalar(0.065); card.position.set(0, -h / 2 - 0.16, -D); held.add(card);
+  card.scale.multiplyScalar(0.065); card.position.set(0, -h / 2 - 0.06, -D); held.add(card);
   const ml = label(['Moon'], '#ffe6be', 0.6, 48); ml.scale.multiplyScalar(0.045); ml.position.set(moonDisc.position.x, moonDisc.position.y - md - 0.05, -D); held.add(ml);
   held.visible = true; o.quad.visible = false; labels.visible = false; guide.visible = false; hiRing.visible = false; frame.visible = false;
   document.querySelectorAll('#strip button').forEach(b => b.classList.toggle('active', b.dataset.des === o.des));
 }
-function release() { if (!heldObj) return; heldObj.quad.visible = true; labels.visible = true; if (target) showSelected(target, true); heldObj = null; held.visible = false; held.clear(); document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active')); }
+function release() { if (!heldObj) return; held.scale.setScalar(1); held.position.z = 0; heldObj.quad.visible = true; labels.visible = true; if (target) showSelected(target, true); heldObj = null; held.visible = false; held.clear(); document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active')); }
 const ray = new THREE.Raycaster();
 function objectInView(ndc) {                      // ndc: optional pointer position (desktop); default = the reticle
   sky.updateMatrixWorld(true);
@@ -700,7 +715,7 @@ const BTN = new Map();
 for (const o of OBJECTS) {
   const b = document.createElement('button'); b.dataset.des = o.des;
   b.innerHTML = `<b>${o.name}</b><small>${o.name === o.des ? (TYPE_LABEL[o.type] || '') : o.des}${o.type ? ' · ' + (TYPE_LABEL[o.type] || o.type) : ''}</small>`;
-  b.onclick = () => { release(); setTarget(o); };
+  b.onclick = () => { release(); if (target !== o) setTarget(o); };
   b.ondblclick = () => { lookAt(o.quad); };
   BTN.set(o, b); $('strip').append(b);
 }
@@ -743,7 +758,7 @@ renderer.domElement.addEventListener('pointerdown', e => { drag = [e.clientX, e.
 addEventListener('pointerup', e => {
   if (drag && !drag[4] && !renderer.xr.isPresenting && !phoneMode && e.target === renderer.domElement) {
     if (heldObj) release();
-    else { const o = objectInView(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1)); if (o) setTarget(o); }
+    else { const o = objectInView(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1)); if (o) { if (target !== o) setTarget(o); hold(o); } }
   }
   drag = null;
 });
@@ -766,7 +781,7 @@ if (qs.get('tile')) { HIPS.layers.forEach(l => l.loadCone = 2); qs.get('tile').s
 if (qs.get('settings')) { $('drawer').hidden = false; $('settings').setAttribute('aria-expanded', 'true'); }
 if (qs.get('look')) setTimeout(() => { const v = qs.get('look'); const o = targetObj(v) || OBJECTS.find(x => x.des === v)?.quad; if (o) lookAt(o); }, 300);
 if (qs.get('target')) setTimeout(() => { const o = OBJECTS.find(x => x.des === qs.get('target')); if (o) setTarget(o); }, 300);
-if (qs.get('hold')) setTimeout(() => { const o = OBJECTS.find(x => x.des === qs.get('hold')); if (o) { lookAt(o.quad); hold(o); } }, 300);
+if (qs.get('hold')) setTimeout(() => { const o = OBJECTS.find(x => x.des === qs.get('hold')); if (o) { lookAt(o.quad); if (qs.get('select')) setTarget(o); hold(o); if (qs.get('release')) setTimeout(release, 1500); } }, 300);
 
 // ---------------------------------------------------------------- Phone AR (magic window)
 // No WebXR on iOS/most phones: the gyroscope + compass steer the view instead, the rear camera shows behind the
@@ -856,6 +871,9 @@ renderer.setAnimationLoop(tms => {
   const eye = eyeOf();
   horizon.position.copy(eye); sky.matrix.setPosition(eye);        // sky and horizon ride with the eye: everything is at infinity
   if (!heldObj) updateGuide(tms);
+  else if (!renderer.xr.isPresenting) {                            // the open view keeps its apparent size when the desktop zooms
+    const k = camera.fov / 70; held.scale.setScalar(k); held.position.z = -1.2 * (1 - k);
+  }
   const q = (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera).getWorldQuaternion(new THREE.Quaternion());
   const kz = renderer.xr.isPresenting ? 1 : Math.min(1.7, Math.max(0.1, 1.4 * camera.fov / 70));   // constant on-screen size when zooming
   for (const L of LABELS) {                                        // screen-aligned billboards that fade in and out
