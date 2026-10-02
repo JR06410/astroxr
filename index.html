@@ -130,7 +130,7 @@
       <label><input id="hips" type="checkbox" checked> streamed DSS2 sky</label>
     </div>
     <div class="row"><span class="hint" id="xrhint">Checking WebXR…</span></div>
-    <div class="row"><span class="hint">Pick an object in the strip or click one; the arrow guides you. Drag to look · + / − or wheel to zoom (the sky resolves deeper as you go) · Return for the wide view · click an object to zoom to it · A = align</span></div>
+    <div class="row"><span class="hint">Pick an object in the strip or click one; the arrow guides you. Drag to look · + / − or wheel to zoom (the sky resolves deeper as you go) · Return for the wide view · click an object to zoom to it, and the view tracks it as the sky turns · A = align</span></div>
   </section>
 </div>
 
@@ -887,6 +887,7 @@ $('lookBtn').onclick = () => lookAt(targetObj(POLARIS));
 renderer.domElement.addEventListener('pointerdown', e => { drag = [e.clientX, e.clientY, yawCam, pitchCam, false]; });
 // desktop: a click on an object selects it as the target; a double-click pulls it closer; clicking empty sky does nothing
 addEventListener('pointerup', e => {
+  if (drag && drag[4] && target && camera.fov < 15) setTarget(target);   // panning away releases the tracking lock
   if (drag && !drag[4] && !renderer.xr.isPresenting && !phoneMode && e.target === renderer.domElement) {
     if (heldObj) release();
     else { const o = objectInView(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1));
@@ -1003,6 +1004,9 @@ renderer.setAnimationLoop(tms => {
   if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
   const eye = eyeOf();
   horizon.position.copy(eye); sky.matrix.setPosition(eye);        // sky and horizon ride with the eye: everything is at infinity
+  // The sky really does rotate (15 deg/hour), so at a narrow field the view drifts off an object within a minute.
+  // While an object is selected and the field is narrow, keep the view on it -- the same job a tracking mount does.
+  if (target && !drag && !heldObj && !renderer.xr.isPresenting && !phoneMode && camera.fov < 15) lookAt(target.quad);
   if (!heldObj) updateGuide(tms);
   else if (!renderer.xr.isPresenting) {                            // the open view keeps its apparent size when the desktop zooms
     const k = camera.fov / 70; held.scale.setScalar(k); held.position.z = -1.2 * (1 - k);
