@@ -121,6 +121,7 @@
       <label><input id="planets" type="checkbox" checked> planets</label>
       <label><input id="cons" type="checkbox" checked> constellations</label>
       <label><input id="regions" type="checkbox" checked> survey plates</label>
+      <label><input id="hips" type="checkbox" checked> streamed DSS2 sky</label>
     </div>
     <div class="row"><span class="hint" id="xrhint">Checking WebXR…</span></div>
     <div class="row"><span class="hint">Pick an object in the strip; the arrow guides you. Drag · wheel zoom (0 = back to 70°) · click = pull closer · L = turn to target · A = align · Esc</span></div>
@@ -260,8 +261,9 @@ function placeLabels() {
     L.gazed = L.dot > gaze && L.kind !== 'con';
     if (L.kind === 'lib' && L.dot > cone && L.anchor.visible) near.push(L);
   }
+  updateHips(fwd, performance.now());
   for (const r of REGIONS) {                                                   // survey plates load as the view approaches them
-    if (r.loaded) continue;
+    if (r.loaded || HIPS.enabled) continue;
     const d = r.quad.getWorldPosition(new THREE.Vector3()).sub(eye).normalize();
     if (d.dot(fwd) > Math.cos(60 * DEG)) loadRegion(r);
   }
@@ -332,7 +334,7 @@ function loadTex(o) {
   if (o.loaded) return; o.loaded = true;
   loader.load(o.path, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter;
     const b = skyLevel(t.image); o.quad.material.uniforms.black.value.set(b[0], b[1], b[2]); o.quad.material.uniforms.map.value = t;
-    o.quad.visible = !o.covered; });
+    o.quad.visible = !o.covered && !(HIPS.enabled && HIPS.loaded.size > 0); });
 }
 for (const o of OBJECTS) {
   const w = chord(o.field[0] * ARCMIN), h = chord(o.field[1] * ARCMIN);
@@ -363,9 +365,107 @@ for (const o of OBJECTS) {
 function loadRegion(r) {
   if (r.loaded) return; r.loaded = true;
   loader.load(r.path, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter;
-    const b = skyLevel(t.image); r.quad.material.uniforms.black.value.set(b[0], b[1], b[2]); r.quad.material.uniforms.map.value = t; r.quad.visible = $('regions').checked; });
+    const b = skyLevel(t.image); r.quad.material.uniforms.black.value.set(b[0], b[1], b[2]); r.quad.material.uniforms.map.value = t; r.quad.visible = $('regions').checked && !(HIPS.enabled && HIPS.loaded.size > 0); });
 }
 FEATURED.forEach(loadTex);
+
+// ---------------------------------------------------------------- streamed DSS2 sky (HiPS)
+// The whole sky as HEALPix tiles from CDS (the tiles Aladin uses): order 3 = 768 tiles of 7.3 degrees at
+// 0.86'/px, finer than a headset resolves. Tiles load by proximity to the gaze and are dropped again far behind
+// it, so memory stays bounded. Geometry: nested pixel -> (face, x, y) -> unit vector (HEALPix xyf2loc), an 8x8
+// curved mesh per tile. Image orientation calibrated against M31/M42/M13: column = HEALPix y, row = x.
+// Needs a host without a restrictive CSP (GitHub Pages); inside the claude.ai artifact the first tile fails and
+// the layer switches itself off, leaving the plates and cut-outs.
+const HIPS = {
+  base: 'https://alasky.cds.unistra.fr/DSS/DSSColor', G: 8, maxInflight: 8, enabled: true, failed: 0, gain: 2.2, loaded: new Set(),
+  // two layers: order 2 (192 tiles, 14.6 deg, 1.7'/px) covers the whole sky quickly and is kept; order 3 refines
+  // around the gaze and is dropped again far behind it. A coarse tile hides once its four children are in.
+  layers: [
+    { order: 2, nside: 4, loadCone: -1.0, dropCone: -1.0, maxLoaded: 192, tiles: [], radius: 1.03 },
+    { order: 3, nside: 8, loadCone: Math.cos(45 * DEG), dropCone: Math.cos(80 * DEG), maxLoaded: 130, tiles: [], radius: 1.02 },
+  ],
+  inflight: 0,
+};
+const JRLL = [2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4], JPLL = [1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7];
+function nest2xyf(nside, ipix) {
+  const npf = nside * nside, face = Math.floor(ipix / npf); let pp = ipix % npf, x = 0, y = 0;
+  for (let b = 0; b < 15; b++) { x |= ((pp >> (2 * b)) & 1) << b; y |= ((pp >> (2 * b + 1)) & 1) << b; }   // 32-bit shifts: 2b+1 < 32
+  return [x, y, face];
+}
+function xyf2vec(x, y, face) {                     // x, y in [0,1] within the face -> unit vector (equatorial)
+  const jr = JRLL[face] - x - y; let nr, z;
+  if (jr < 1) { nr = jr; z = 1 - nr * nr / 3; } else if (jr > 3) { nr = 4 - jr; z = nr * nr / 3 - 1; } else { nr = 1; z = (2 - jr) * 2 / 3; }
+  let tmp = JPLL[face] * nr + x - y; if (tmp < 0) tmp += 8; if (tmp >= 8) tmp -= 8;
+  const phi = nr < 1e-15 ? 0 : (Math.PI / 4 * tmp) / nr, st = Math.sqrt(Math.max(0, 1 - z * z));
+  return new THREE.Vector3(st * Math.cos(phi), st * Math.sin(phi), z);
+}
+const hipsGroup = new THREE.Group(); sky.add(hipsGroup);
+function tileMesh(layer, ipix) {
+  const [ix, iy, face] = nest2xyf(layer.nside, ipix), G = HIPS.G, n = layer.nside;
+  const pos = [], uv = [], idx = [];
+  for (let i = 0; i <= G; i++) for (let j = 0; j <= G; j++) {
+    const v = xyf2vec((ix + i / G) / n, (iy + j / G) / n, face).multiplyScalar(R * layer.radius);
+    pos.push(v.x, v.y, v.z); uv.push(j / G, 1 - i / G);                   // column = HEALPix y, row (from top) = x
+  }
+  for (let i = 0; i < G; i++) for (let j = 0; j < G; j++) { const a = i * (G + 1) + j, b = a + 1, c = a + G + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx);
+  const m = surveyMaterial(); m.uniforms.feather.value = 0.0; m.uniforms.gain.value = HIPS.gain; m.side = THREE.DoubleSide;
+  const mesh = new THREE.Mesh(g, m); mesh.visible = false; mesh.renderOrder = layer.order === 3 ? -3 : -2;
+  return mesh;
+}
+for (const layer of HIPS.layers) for (let ip = 0; ip < 12 * layer.nside * layer.nside; ip++) {
+  const [ix, iy, face] = nest2xyf(layer.nside, ip);
+  layer.tiles.push({ ip, layer, centre: xyf2vec((ix + 0.5) / layer.nside, (iy + 0.5) / layer.nside, face), mesh: null, tex: null, last: 0 });
+}
+const skyInv = new THREE.Matrix3();
+function updateHips(fwd, now) {
+  if (!HIPS.enabled) return;
+  skyInv.setFromMatrix4(sky.matrixWorld).invert();                     // gaze in the sky's own (equatorial) frame
+  const g = fwd.clone().applyMatrix3(skyInv).normalize();
+  const want = [];
+  for (const layer of HIPS.layers) for (const t of layer.tiles) {
+    const d = t.centre.dot(g);
+    if (t.tex) { if (d > layer.dropCone) t.last = now; }
+    else if (d > layer.loadCone) want.push([d + (layer.order === 2 ? 0.5 : 0), t]);     // coarse layer first
+  }
+  want.sort((a, b) => b[0] - a[0]);
+  for (const [, t] of want) { if (HIPS.inflight >= HIPS.maxInflight) break; loadTile(t, now); }
+  for (const layer of HIPS.layers) {
+    const have = layer.tiles.filter(t => t.mesh);
+    if (have.length > layer.maxLoaded) {
+      for (const t of have.sort((a, b) => a.last - b.last).slice(0, have.length - layer.maxLoaded)) {
+        if (now - t.last < 2000) continue;
+        hipsGroup.remove(t.mesh); t.mesh.geometry.dispose(); t.mesh.material.dispose(); t.tex.dispose(); t.tex = null; t.mesh = null; HIPS.loaded.delete(t);
+        if (layer.order === 3) refreshParent(t);
+      }
+    }
+  }
+}
+function refreshParent(t) {                        // an order-2 tile shows unless all four order-3 children are present
+  const parent = HIPS.layers[0].tiles[Math.floor(t.ip / 4)]; if (!parent.mesh) return;
+  const kids = HIPS.layers[1].tiles.slice(parent.ip * 4, parent.ip * 4 + 4);
+  parent.mesh.visible = $('hips').checked && !kids.every(k => k.mesh);
+}
+function loadTile(t, now) {
+  t.tex = 'loading'; t.last = now; HIPS.inflight++;
+  const url = `${HIPS.base}/Norder${t.layer.order}/Dir${Math.floor(t.ip / 10000) * 10000}/Npix${t.ip}.jpg`;
+  loader.load(url, tex => {
+    HIPS.inflight--; tex.colorSpace = THREE.SRGBColorSpace; tex.generateMipmaps = false; tex.minFilter = THREE.LinearFilter;
+    t.tex = tex; t.mesh = tileMesh(t.layer, t.ip); const b = skyLevel(tex.image); t.mesh.material.uniforms.black.value.set(b[0], b[1], b[2]);
+    t.mesh.material.uniforms.map.value = tex; t.mesh.visible = $('hips').checked; hipsGroup.add(t.mesh); HIPS.loaded.add(t);
+    if (t.layer.order === 3) refreshParent(t); else refreshParent({ ip: t.ip * 4 });
+    if (HIPS.loaded.size === 1) setHipsCoverage(true);
+    if (location.search.includes('debug')) console.log('hips tile', t.layer.order, t.ip, 'loaded', HIPS.loaded.size);
+  }, undefined, () => {
+    HIPS.inflight--; t.tex = null; HIPS.failed++;
+    if (HIPS.failed >= 3 && HIPS.loaded.size === 0) { HIPS.enabled = false; $('hips').checked = false; setHipsCoverage(false); $('xrhint').textContent = 'Streamed sky unavailable on this host; using bundled plates.'; }
+  });
+}
+// while the streamed sky is on, the bundled plates and cut-outs step aside (the tiles cover the same imagery)
+function setHipsCoverage(on) {
+  for (const r of REGIONS) r.quad.visible = !on && $('regions').checked && r.loaded;
+  for (const o of OBJECTS) if (o.loaded && o.quad.material.uniforms.map.value) o.quad.visible = !on && !(o.covered && $('regions').checked);
+}
 
 // Constellation lines (d3-celestial), drawn on the sky sphere.
 const constellations = new THREE.Group(); sky.add(constellations);
@@ -599,8 +699,9 @@ $('lon').onchange = e => { lon = +e.target.value; store('lon', lon); updateSky()
 $('geo').onclick = () => navigator.geolocation?.getCurrentPosition(p => { lat = +p.coords.latitude.toFixed(3); lon = +p.coords.longitude.toFixed(3); $('lat').value = lat; $('lon').value = lon; store('lat', lat); store('lon', lon); updateSky(); }, () => { $('geo').textContent = 'No fix'; });
 $('toff').oninput = e => { toff = +e.target.value; $('toffv').textContent = (toff >= 0 ? '+' : '') + toff.toFixed(1) + ' h'; updateSky(); };
 $('now').onclick = () => { toff = 0; $('toff').value = 0; $('toffv').textContent = '+0.0 h'; updateSky(); };
-$('gain').oninput = e => { const g = +e.target.value; skyMat.uniforms.gain.value = g; for (const o of OBJECTS) o.quad.material.uniforms.gain.value = g; for (const r of REGIONS) r.quad.material.uniforms.gain.value = 2.2 * g; };
+$('gain').oninput = e => { const g = +e.target.value; skyMat.uniforms.gain.value = g; for (const o of OBJECTS) o.quad.material.uniforms.gain.value = g; for (const r of REGIONS) r.quad.material.uniforms.gain.value = 2.2 * g; for (const t of HIPS.loaded) t.mesh.material.uniforms.gain.value = HIPS.gain * g; };
 $('outlines').onchange = e => OBJECTS.forEach(o => { o.edge.visible = e.target.checked; });
+$('hips').onchange = e => { HIPS.enabled = e.target.checked; for (const t of HIPS.loaded) { t.mesh.visible = HIPS.enabled; if (t.layer.order === 3) refreshParent(t); } setHipsCoverage(HIPS.enabled && HIPS.loaded.size > 0); };
 $('regions').onchange = e => { REGIONS.forEach(r => { r.quad.visible = e.target.checked && r.loaded; }); OBJECTS.forEach(o => { if (o.loaded && o.quad.material.uniforms.map.value) o.quad.visible = !(e.target.checked && o.covered); }); };
 $('starNames').onchange = placeLabels; $('planets').onchange = updateSky; $('cons').onchange = () => { constellations.children[0].visible = $('cons').checked; placeLabels(); };
 $('settings').onclick = () => { const d = $('drawer'); d.hidden = !d.hidden; $('settings').setAttribute('aria-expanded', String(!d.hidden)); };
@@ -623,6 +724,7 @@ addEventListener('wheel', e => setFov(camera.fov + e.deltaY * 0.03), { passive: 
 setCam();
 const qs = new URLSearchParams(location.search);
 if (qs.get('fov')) setFov(+qs.get('fov'));
+if (qs.get('tile')) { HIPS.layers.forEach(l => l.loadCone = 2); qs.get('tile').split(',').forEach(n => loadTile(HIPS.layers[1].tiles[+n], performance.now())); }   // test hook: order-3 tiles only
 if (qs.get('settings')) { $('drawer').hidden = false; $('settings').setAttribute('aria-expanded', 'true'); }
 if (qs.get('look')) setTimeout(() => { const v = qs.get('look'); const o = targetObj(v) || OBJECTS.find(x => x.des === v)?.quad; if (o) lookAt(o); }, 300);
 if (qs.get('target')) setTimeout(() => { const o = OBJECTS.find(x => x.des === qs.get('target')); if (o) setTarget(o); }, 300);

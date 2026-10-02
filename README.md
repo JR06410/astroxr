@@ -37,6 +37,13 @@ solves on the mount with plate solving and AstroXR will solve on the headset wit
   ScopeControl's OpenNGC catalogue by `tools/build_library.py` and fetched from hips2fits (DSS2 colour) with a
   field of 1.4× the catalogued major axis. Each is a quad whose angular size equals its field, north-up/east-left,
   labelled with name, designation, type and size. Search box and "up now" filter in the strip.
+- **Streamed DSS2 sky (HiPS)**: on the live site the whole sky is DSS2 colour, streamed as HEALPix tiles from
+  CDS — the tiles Aladin uses. Order 2 (192 tiles, 14.6°, 1.7′/px — finer than a headset shows) loads for the
+  whole sky within seconds and is kept; order 3 (7.3°, 0.86′/px) refines within 45° of the gaze and is dropped
+  far behind it, each coarse tile hiding once its four children are in. Tile geometry is the HEALPix nested
+  pixel → (face, x, y) → vector mapping (an 8×8 curved mesh per tile); the image orientation (column = HEALPix
+  y, row = x) was calibrated against M31, M42 and M13. Inside the claude.ai artifact the tiles are blocked by
+  its CSP, so the layer switches itself off and the bundled plates below take over.
 - **Regional survey plates**: 18 large DSS2 colour fields (Cygnus, Cepheus, Cassiopeia, Auriga, California,
   Orion, Monoceros, Sagittarius, Ophiuchus, Carina, the Magellanic Clouds…) at 1.5 px/arcmin, drawn under the
   cut-outs so nebulosity is continuous across the rich areas (`tools/build_regions.py`). Every plate and cut-out
@@ -84,6 +91,12 @@ The `sky` group's local frame is J2000 equatorial (x → RA 0°, z → NCP). Eac
 `Astronomy.Rotation_EQJ_HOR(time, observer)` (HOR: x north, y west, z zenith) mapped onto three.js world
 (x east, y up, −z north), then by the user's yaw offset about the vertical. Everything is drawn at 50 m so head
 movement is irrelevant; the sky and horizon follow the eye position.
+
+## Live site
+
+**https://jr06410.github.io/astroxr/** — GitHub Pages from the deploy-only repo `JR06410/astroxr`
+(this folder is the source; `python tools/deploy_pages.py` mirrors it there and pushes). Top-level HTTPS, so
+Phone AR, Enter AR and the camera all work. The claude.ai artifact is a desktop preview only.
 
 ## Running
 
