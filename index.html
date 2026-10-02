@@ -124,7 +124,7 @@
       <label><input id="hips" type="checkbox" checked> streamed DSS2 sky</label>
     </div>
     <div class="row"><span class="hint" id="xrhint">Checking WebXR…</span></div>
-    <div class="row"><span class="hint">Pick an object in the strip; the arrow guides you. Drag · wheel zoom (0 = back to 70°) · click = pull closer · L = turn to target · A = align · Esc</span></div>
+    <div class="row"><span class="hint">Pick an object in the strip or click one; the arrow guides you. Drag · wheel zoom (0 = 70°) · double-click = pull closer · L = turn to target · A = align · Esc</span></div>
   </section>
 </div>
 
@@ -599,9 +599,9 @@ function hold(o) {
 }
 function release() { if (!heldObj) return; heldObj.quad.visible = true; labels.visible = true; heldObj = null; held.visible = false; held.clear(); document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active')); }
 const ray = new THREE.Raycaster();
-function objectInView() {
+function objectInView(ndc) {                      // ndc: optional pointer position (desktop); default = the reticle
   sky.updateMatrixWorld(true);
-  ray.set(eyeOf(), fwdOf());
+  if (ndc) ray.setFromCamera(ndc, camera); else ray.set(eyeOf(), fwdOf());
   const hit = ray.intersectObjects(OBJECTS.map(o => o.quad), false)[0];
   return hit ? hit.object.userData.obj : null;
 }
@@ -610,6 +610,7 @@ function select() {                              // trigger / pinch / click: gra
   const o = objectInView();
   if (o) hold(o); else if (renderer.xr.isPresenting) alignOn(POLARIS);
 }
+addEventListener('pointerup', e => { if (phoneMode && drag && !drag[4] && e.target === renderer.domElement) select(); });   // phone: tap = grab/release
 for (let i = 0; i < 2; i++) { const c = renderer.xr.getController(i); c.addEventListener('selectstart', select); scene.add(c); }
 addEventListener('keydown', e => { if (e.key === '0') setFov(70); if (e.key.toLowerCase() === 'a') alignOn(POLARIS); if (e.key === 'Escape') { if (heldObj) release(); else if (target) setTarget(target); } if (e.key.toLowerCase() === 'l' && target) lookAt(target.quad); });
 
@@ -719,7 +720,19 @@ function lookAt(obj) {
 }
 $('lookBtn').onclick = () => lookAt(targetObj(POLARIS));
 renderer.domElement.addEventListener('pointerdown', e => { drag = [e.clientX, e.clientY, yawCam, pitchCam, false]; });
-addEventListener('pointerup', e => { if (drag && !drag[4] && !renderer.xr.isPresenting) select(); drag = null; });
+// desktop: a click on an object selects it as the target; a double-click pulls it closer; clicking empty sky does nothing
+addEventListener('pointerup', e => {
+  if (drag && !drag[4] && !renderer.xr.isPresenting && !phoneMode && e.target === renderer.domElement) {
+    if (heldObj) release();
+    else { const o = objectInView(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1)); if (o) setTarget(o); }
+  }
+  drag = null;
+});
+renderer.domElement.addEventListener('dblclick', e => {
+  if (renderer.xr.isPresenting || phoneMode) return;
+  const o = objectInView(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1));
+  if (o) { release(); if (target !== o) setTarget(o); hold(o); }
+});
 addEventListener('pointermove', e => { if (!drag || renderer.xr.isPresenting || phoneMode) return;
   if (Math.hypot(e.clientX - drag[0], e.clientY - drag[1]) > 4) drag[4] = true;
   yawCam = drag[2] + (e.clientX - drag[0]) * 0.0025 * camera.fov / 70; pitchCam = Math.max(-1.5, Math.min(1.5, drag[3] + (e.clientY - drag[1]) * 0.0025 * camera.fov / 70)); setCam(); });
