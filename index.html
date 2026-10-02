@@ -1,0 +1,729 @@
+<meta charset="utf-8">
+<title>AstroXR</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400&display=swap">
+<style>
+  :root {
+    --ground: #05070d; --panel: rgba(9, 12, 22, 0.88); --line: #27304a; --chip: #121a2c;
+    --text: #e8ecf4; --muted: #8e97a8; --accent: #ffb05a; --moon: #ffe6be; --ok: #7fd68a; --warn: #ff8a6a;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--ground); color: var(--text); overflow: hidden;
+         font: 14px/1.45 "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; }
+  canvas { display: block; position: fixed; inset: 0; }
+  #cam { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -1; display: none; filter: brightness(0.35); }
+  button { background: var(--chip); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
+           font: 500 14px "IBM Plex Sans", system-ui, sans-serif; cursor: pointer; white-space: nowrap; }
+  button.primary { background: var(--accent); color: #1a1206; border-color: var(--accent); font-weight: 600; }
+  button.quiet { background: transparent; }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:disabled { opacity: .4; cursor: default; }
+  select { min-width: 0; max-width: 100%; }
+  select, input[type=number] { background: var(--chip); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+           padding: 7px 9px; font: 14px "IBM Plex Sans", system-ui, sans-serif; }
+  input[type=number] { font-family: "IBM Plex Mono", Consolas, monospace; width: 78px; padding: 5px 7px; }
+  input[type=range] { flex: 1; accent-color: var(--accent); min-width: 120px; }
+  label.k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+
+  /* top bar */
+  #bar { position: fixed; top: 0; left: 0; right: 0; z-index: 3; display: flex; align-items: center; gap: 10px;
+         padding: calc(10px + env(safe-area-inset-top, 0px)) 16px 10px; pointer-events: none; }
+  #bar > * { pointer-events: auto; }
+  #brand { font-weight: 600; font-size: 18px; letter-spacing: .02em; margin-right: 6px; }
+  #brand span { color: var(--accent); }
+  #align-state { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--panel);
+                 border: 1px solid var(--line); font-size: 13px; }
+  #align-state i { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); display: inline-block; }
+  #align-state.ok i { background: var(--ok); }
+  #bar .spacer { flex: 1; pointer-events: none; }
+
+  /* settings drawer */
+  #drawer { position: fixed; top: calc(58px + env(safe-area-inset-top, 0px)); left: 16px; z-index: 3; width: min(300px, calc(100vw - 32px));
+            background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 2px 14px 8px; backdrop-filter: blur(10px); font-size: 13px;
+            max-height: calc(100vh - 170px); overflow-y: auto; overflow-x: hidden; }
+  #drawer section { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  #drawer section:last-child { border-bottom: 0; }
+  #drawer h2 { margin: 0 0 6px; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-weight: 500; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row + .row { margin-top: 8px; }
+  .mono { font-family: "IBM Plex Mono", Consolas, monospace; font-size: 12px; color: var(--muted); }
+  .hint { font-size: 11px; color: var(--muted); line-height: 1.35; }
+
+  /* object strip */
+  #stripbar { position: fixed; left: 16px; right: 16px; bottom: calc(76px + env(safe-area-inset-bottom, 0px)); z-index: 3; display: flex; gap: 10px; align-items: center; pointer-events: none; }
+  #stripbar > * { pointer-events: auto; }
+  #stripbar input[type=search] { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; width: min(320px, 60vw); font: 14px "IBM Plex Sans", system-ui, sans-serif; }
+  #stripbar label { font-size: 12px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; }
+  #strip { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; display: flex; gap: 8px; overflow-x: auto; padding: 10px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+           scrollbar-width: thin; mask-image: linear-gradient(90deg, transparent, #000 16px, #000 calc(100% - 16px), transparent); }
+  #strip button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 12px; background: var(--panel); backdrop-filter: blur(10px); }
+  #strip button b { font-weight: 600; }
+  #strip button small { color: var(--muted); font-size: 11px; }
+  #strip button small em { color: var(--accent); font-style: normal; }
+  #strip button.below { opacity: .45; }
+  #strip button.active { border-color: var(--accent); }
+
+  /* in-headset HUD (dom-overlay) */
+  #hud { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(28px + env(safe-area-inset-bottom, 0px)); z-index: 4;
+         display: none; flex-direction: column; align-items: center; gap: 10px; }
+  #hud .hrow { display: flex; gap: 10px; }
+  #hud button { font-size: 18px; padding: 12px 18px; background: var(--panel); }
+  #hud .primary { background: var(--accent); }
+  #hud #hudState { cursor: pointer; font-size: 15px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; }
+  @media (max-width: 600px) { #brand { font-size: 16px; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div id="bar">
+  <div id="brand">Astro<span>XR</span></div>
+  <button id="ar" class="primary" disabled>Enter AR</button>
+  <button id="vr" disabled>VR</button>
+  <button id="phone" hidden>Phone AR</button>
+  <div id="align-state"><i></i><span id="alignText">Not aligned</span></div>
+  <div class="spacer"></div>
+  <button id="settings" class="quiet" aria-expanded="false">Settings</button>
+</div>
+
+<div id="drawer" hidden>
+  <section>
+    <h2>Where and when</h2>
+    <div class="row">
+      <div><label class="k" for="lat">Lat</label><br><input id="lat" type="number" step="0.01"></div>
+      <div><label class="k" for="lon">Lon</label><br><input id="lon" type="number" step="0.01"></div>
+      <button id="geo" title="Ask the browser for a position">Locate</button>
+    </div>
+    <div class="row">
+      <label class="k" for="toff" style="min-width:40px">Time</label><span id="toffv" class="mono">+0.0 h</span>
+      <input id="toff" type="range" min="-12" max="12" step="0.25" value="0">
+      <button id="now">Now</button>
+    </div>
+    <div id="clock" class="mono"></div>
+  </section>
+  <section>
+    <h2>Align the sky</h2>
+    <div class="row">
+      <button id="alignBtn" class="primary">Align on Polaris</button>
+      <button id="lookBtn" title="Turn the desktop view onto Polaris">Find Polaris</button>
+      <button id="resetYaw" class="quiet">Reset</button>
+    </div>
+    <div class="row"><span class="hint">Reticle on the real Polaris, then Align (headset: trigger). Holds all night; its altitude = your latitude.</span></div>
+  </section>
+  <section>
+    <h2>Display</h2>
+    <div class="row">
+      <label class="k" for="gain" style="min-width:40px">Sky</label>
+      <input id="gain" type="range" min="0" max="2" step="0.05" value="1">
+    </div>
+    <div class="row">
+      <label><input id="outlines" type="checkbox"> field outlines</label>
+      <label><input id="starNames" type="checkbox" checked> star names</label>
+      <label><input id="planets" type="checkbox" checked> planets</label>
+      <label><input id="cons" type="checkbox" checked> constellations</label>
+      <label><input id="regions" type="checkbox" checked> survey plates</label>
+    </div>
+    <div class="row"><span class="hint" id="xrhint">Checking WebXR…</span></div>
+    <div class="row"><span class="hint">Pick an object in the strip; the arrow guides you. Drag · wheel zoom (0 = back to 70°) · click = pull closer · L = turn to target · A = align · Esc</span></div>
+  </section>
+</div>
+
+<div id="stripbar"><input id="search" type="search" placeholder="Find an object (M, NGC, IC, name)…" autocomplete="off"><label><input id="upOnly" type="checkbox"> up now</label><span id="count" class="hint"></span></div>
+<div id="strip"></div>
+
+<video id="cam" autoplay muted playsinline></video>
+<div id="hud">
+  <div id="hudState">Not aligned</div>
+  <div class="hrow">
+    <button id="hudAlign" class="primary">Align on Polaris</button>
+    <button id="hudExit">Exit</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js"></script>
+<script id="data" type="application/json">{"library":[{"id":"ESO056-115","name":"Large Magellanic Cloud","ra":80.8937,"dec":-69.7561,"size":646.0,"mag":0.3,"type":"G","field":240.0,"file":"library/eso056-115.jpg","px":800},{"id":"Sh2-276","name":"Barnard's Loop","ra":81.875,"dec":-3.97,"size":600,"mag":null,"type":"HII","field":240.0,"file":"library/sh2-276.jpg","px":800},{"id":"NGC0292","name":"Small Magellanic Cloud","ra":13.1866,"dec":-72.8286,"size":299.9,"mag":2.3,"type":"G","field":240.0,"file":"library/ngc0292.jpg","px":800},{"id":"Sh2-264","name":"Lambda Orionis Ring","ra":83.75,"dec":9.93,"size":300,"mag":null,"type":"HII","field":240.0,"file":"library/sh2-264.jpg","px":800},{"id":"IC0353","name":"","ra":58.2545,"dec":25.848,"size":182.0,"mag":null,"type":"Neb","field":240.0,"file":"library/ic0353.jpg","px":800},{"id":"Sh2-240","name":"Spaghetti Nebula","ra":84.75,"dec":28.0,"size":180,"mag":null,"type":"SNR","field":240.0,"file":"library/sh2-240.jpg","px":800},{"id":"NGC1909","name":"the Witch Head Nebula","ra":76.231,"dec":-7.2656,"size":180.0,"mag":null,"type":"RfN","field":240.0,"file":"library/ngc1909.jpg","px":800},{"id":"IC0360","name":"","ra":62.2607,"dec":26.1312,"size":180.0,"mag":null,"type":"Neb","field":240.0,"file":"library/ic0360.jpg","px":800},{"id":"Sh2-129","name":"Flying Bat Nebula","ra":317.95,"dec":59.95,"size":150,"mag":null,"type":"HII","field":210.0,"file":"library/sh2-129.jpg","px":800},{"id":"NGC1499","name":"California Nebula","ra":60.8101,"dec":36.3675,"size":160.0,"mag":5.0,"type":"Neb","field":224.0,"file":"library/ngc1499.jpg","px":800},{"id":"Sh2-54","name":"","ra":274.25,"dec":-11.67,"size":140,"mag":null,"type":"HII","field":196.0,"file":"library/sh2-54.jpg","px":800},{"id":"NGC3372","name":"Carina Nebula","ra":161.2855,"dec":-59.8667,"size":120.0,"mag":3.0,"type":"HII","field":168.0,"file":"library/ngc3372.jpg","px":800},{"id":"IC0341","name":"","ra":55.232,"dec":21.9602,"size":134.9,"mag":null,"type":"Neb","field":188.9,"file":"library/ic0341.jpg","px":800},{"id":"IC0354","name":"","ra":58.4913,"dec":23.147,"size":128.8,"mag":null,"type":"Neb","field":180.3,"file":"library/ic0354.jpg","px":800},{"id":"M44","name":"Beehive","ra":130.0925,"dec":19.6721,"size":108.6,"mag":3.1,"type":"OCl","field":152.0,"file":"library/m44.jpg","px":760},{"id":"IC1831","name":"","ra":40.985,"dec":62.4116,"size":120.2,"mag":null,"type":"Neb","field":168.3,"file":"library/ic1831.jpg","px":800},{"id":"Sh2-119","name":"Clamshell Nebula","ra":319.625,"dec":43.933,"size":120,"mag":null,"type":"HII","field":168.0,"file":"library/sh2-119.jpg","px":800},{"id":"M24","name":"Small Sgr Star Cloud","ra":274.2338,"dec":-18.5146,"size":120.0,"mag":4.5,"type":"*Ass","field":168.0,"file":"library/m24.jpg","px":800},{"id":"M16","name":"Eagle Nebula","ra":274.7007,"dec":-13.8072,"size":120.0,"mag":6.0,"type":"Neb","field":168.0,"file":"library/m16.jpg","px":800},{"id":"IC4628","name":"","ra":254.2435,"dec":-40.451,"size":89.1,"mag":null,"type":"Neb","field":124.8,"file":"library/ic4628.jpg","px":624},{"id":"NGC6727","name":"","ra":285.4261,"dec":-36.8762,"size":80.0,"mag":null,"type":"RfN","field":112.0,"file":"library/ngc6727.jpg","px":560},{"id":"Cl399","name":"Brocchi's Cluster","ra":291.35,"dec":20.1833,"size":70.0,"mag":3.6,"type":"*Ass","field":98.0,"file":"library/cl399.jpg","px":490},{"id":"IC4592","name":"","ra":242.9945,"dec":-19.4547,"size":60.0,"mag":3.9,"type":"RfN","field":84.0,"file":"library/ic4592.jpg","px":420},{"id":"Sh2-157","name":"Lobster Claw Nebula","ra":349.02,"dec":60.03,"size":60,"mag":null,"type":"HII","field":84.0,"file":"library/sh2-157.jpg","px":420},{"id":"Sh2-132","name":"Lion Nebula","ra":334.75,"dec":56.08,"size":60,"mag":null,"type":"HII","field":84.0,"file":"library/sh2-132.jpg","px":420},{"id":"IC4701","name":"","ra":274.1489,"dec":-16.6483,"size":60.0,"mag":null,"type":"Neb","field":84.0,"file":"library/ic4701.jpg","px":420},{"id":"NGC1432","name":"Maia Nebula","ra":56.4566,"dec":24.3679,"size":60.0,"mag":null,"type":"HII","field":84.0,"file":"library/ngc1432.jpg","px":420},{"id":"IC4604","name":"rho Oph Nebula","ra":246.3799,"dec":-23.4366,"size":60.0,"mag":5.1,"type":"Neb","field":84.0,"file":"library/ic4604.jpg","px":420},{"id":"Sh2-155","name":"Cave Nebula","ra":344.2,"dec":62.62,"size":50,"mag":null,"type":"HII","field":70.0,"file":"library/sh2-155.jpg","px":350},{"id":"Sh2-115","name":"","ra":308.0,"dec":46.83,"size":50,"mag":null,"type":"HII","field":70.0,"file":"library/sh2-115.jpg","px":350},{"id":"C009","name":"Cave Nebula","ra":344.475,"dec":62.5183,"size":50.0,"mag":null,"type":"HII","field":70.0,"file":"library/c009.jpg","px":350},{"id":"Sh2-308","name":"Dolphin Head Nebula","ra":103.55,"dec":-23.93,"size":40,"mag":null,"type":"HII","field":56.0,"file":"library/sh2-308.jpg","px":280},{"id":"IC0410","name":"","ra":80.675,"dec":33.3667,"size":40.0,"mag":null,"type":"Neb","field":56.0,"file":"library/ic0410.jpg","px":280},{"id":"IC5068","name":"","ra":312.624,"dec":42.4777,"size":40.0,"mag":null,"type":"HII","field":56.0,"file":"library/ic5068.jpg","px":280},{"id":"NGC2174","name":"Monkey Head Nebula","ra":92.3484,"dec":20.6596,"size":40.0,"mag":null,"type":"Neb","field":56.0,"file":"library/ngc2174.jpg","px":280},{"id":"NGC6526","name":"","ra":271.0256,"dec":-24.4419,"size":40.0,"mag":null,"type":"Neb","field":56.0,"file":"library/ngc6526.jpg","px":280},{"id":"NGC0281","name":"","ra":13.2473,"dec":56.6219,"size":35.0,"mag":null,"type":"HII","field":49.0,"file":"library/ngc0281.jpg","px":245},{"id":"M8","name":"Lagoon Nebula","ra":270.922,"dec":-24.3802,"size":45.0,"mag":5.8,"type":"Neb","field":63.0,"file":"library/m8.jpg","px":315},{"id":"IC2391","name":"omi Vel Cluster","ra":130.1328,"dec":-53.0355,"size":29.1,"mag":2.5,"type":"OCl","field":40.7,"file":"library/ic2391.jpg","px":204},{"id":"NGC0104","name":"47 Tuc Cluster","ra":6.0223,"dec":-72.0814,"size":31.8,"mag":4.1,"type":"GCl","field":44.5,"file":"library/ngc0104.jpg","px":223},{"id":"NGC0752","name":"","ra":29.3951,"dec":37.8334,"size":39.0,"mag":5.7,"type":"OCl","field":54.6,"file":"library/ngc0752.jpg","px":273},{"id":"IC5070","name":"Pelican Nebula","ra":312.753,"dec":44.4015,"size":60.0,"mag":8.0,"type":"HII","field":84.0,"file":"library/ic5070.jpg","px":420},{"id":"NGC1435","name":"Merope Nebula","ra":56.542,"dec":23.765,"size":30.0,"mag":null,"type":"Neb","field":42.0,"file":"library/ngc1435.jpg","px":210},{"id":"NGC2736","name":"Pencil Nebula","ra":135.0706,"dec":-45.9481,"size":30.0,"mag":null,"type":"HII","field":42.0,"file":"library/ngc2736.jpg","px":210},{"id":"NGC2024","name":"","ra":85.4274,"dec":-1.8563,"size":30.0,"mag":null,"type":"Neb","field":42.0,"file":"library/ngc2024.jpg","px":210},{"id":"IC4605","name":"","ra":247.552,"dec":-25.1152,"size":30.0,"mag":4.7,"type":"Neb","field":42.0,"file":"library/ic4605.jpg","px":210},{"id":"IC0349","name":"Barnard's Merope Nebula","ra":56.5838,"dec":23.9398,"size":25.7,"mag":null,"type":"RfN","field":36.0,"file":"library/ic0349.jpg","px":180},{"id":"IC1340","name":"","ra":314.0344,"dec":31.0479,"size":25.1,"mag":null,"type":"SNR","field":35.2,"file":"library/ic1340.jpg","px":176},{"id":"NGC6729","name":"","ra":285.4808,"dec":-36.9576,"size":25.0,"mag":null,"type":"Neb","field":35.0,"file":"library/ngc6729.jpg","px":175},{"id":"NGC2516","name":"","ra":119.5294,"dec":-60.7535,"size":24.3,"mag":3.8,"type":"OCl","field":34.0,"file":"library/ngc2516.jpg","px":170},{"id":"M7","name":"Ptolemy's Cluster","ra":268.4633,"dec":-34.7928,"size":22.2,"mag":3.3,"type":"OCl","field":31.1,"file":"library/m7.jpg","px":155},{"id":"IC4665","name":"","ra":266.6132,"dec":5.6487,"size":24.6,"mag":4.2,"type":"OCl","field":34.4,"file":"library/ic4665.jpg","px":172},{"id":"M4","name":"","ra":245.8975,"dec":-26.5255,"size":28.2,"mag":5.4,"type":"GCl","field":39.5,"file":"library/m4.jpg","px":197},{"id":"NGC5139","name":"Omega Centauri","ra":201.6912,"dec":-47.4769,"size":27.0,"mag":5.3,"type":"GCl","field":37.8,"file":"library/ngc5139.jpg","px":189},{"id":"IC4756","name":"","ra":279.7146,"dec":5.4622,"size":24.0,"mag":4.6,"type":"OCl","field":33.6,"file":"library/ic4756.jpg","px":168},{"id":"M48","name":"","ra":123.4299,"dec":-5.7504,"size":28.2,"mag":5.8,"type":"OCl","field":39.5,"file":"library/m48.jpg","px":197},{"id":"M67","name":"","ra":132.8339,"dec":11.8119,"size":33.0,"mag":6.9,"type":"OCl","field":46.2,"file":"library/m67.jpg","px":231},{"id":"M35","name":"","ra":92.2711,"dec":24.3386,"size":24.0,"mag":5.1,"type":"OCl","field":33.6,"file":"library/m35.jpg","px":168},{"id":"Simeis 57","name":"Propeller Nebula","ra":304.0,"dec":43.67,"size":20,"mag":null,"type":"HII","field":28.0,"file":"library/simeis57.jpg","px":140},{"id":"Sh2-170","name":"Little Rosette","ra":0.25,"dec":64.62,"size":20,"mag":null,"type":"HII","field":28.0,"file":"library/sh2-170.jpg","px":140},{"id":"IC1274","name":"","ra":272.4626,"dec":-23.6482,"size":20.0,"mag":null,"type":"HII","field":28.0,"file":"library/ic1274.jpg","px":140},{"id":"IC2177","name":"","ra":106.1538,"dec":-10.4711,"size":20.0,"mag":null,"type":"RfN","field":28.0,"file":"library/ic2177.jpg","px":140},{"id":"IC2599","name":"","ra":159.3629,"dec":-58.7334,"size":20.0,"mag":null,"type":"HII","field":28.0,"file":"library/ic2599.jpg","px":140},{"id":"IC4603","name":"","ra":246.352,"dec":-24.4684,"size":20.0,"mag":null,"type":"Neb","field":28.0,"file":"library/ic4603.jpg","px":140},{"id":"IC4601","name":"","ra":245.0742,"dec":-20.0873,"size":20.0,"mag":null,"type":"Neb","field":28.0,"file":"library/ic4601.jpg","px":140},{"id":"NGC3199","name":"","ra":154.3518,"dec":-57.9222,"size":20.0,"mag":null,"type":"Neb","field":28.0,"file":"library/ngc3199.jpg","px":140},{"id":"NGC6188","name":"Rim Nebula","ra":250.0243,"dec":-48.6623,"size":20.0,"mag":null,"type":"Neb","field":28.0,"file":"library/ngc6188.jpg","px":140},{"id":"NGC3579","name":"","ra":167.9983,"dec":-61.2432,"size":20.0,"mag":null,"type":"Neb","field":28.0,"file":"library/ngc3579.jpg","px":140},{"id":"NGC7822","name":"","ra":0.8973,"dec":67.1616,"size":20.0,"mag":null,"type":"HII","field":28.0,"file":"library/ngc7822.jpg","px":140},{"id":"M34","name":"","ra":40.5308,"dec":42.7461,"size":22.5,"mag":5.2,"type":"OCl","field":31.5,"file":"library/m34.jpg","px":157},{"id":"NGC1647","name":"","ra":71.4815,"dec":19.0951,"size":27.0,"mag":6.4,"type":"OCl","field":37.8,"file":"library/ngc1647.jpg","px":189},{"id":"M47","name":"","ra":114.1459,"dec":-14.4826,"size":19.8,"mag":4.4,"type":"OCl","field":27.7,"file":"library/m47.jpg","px":139},{"id":"M39","name":"","ra":322.9513,"dec":48.4382,"size":19.5,"mag":4.6,"type":"OCl","field":27.3,"file":"library/m39.jpg","px":136},{"id":"NGC2052","name":"","ra":84.296,"dec":-69.7742,"size":18.0,"mag":null,"type":"Neb","field":25.2,"file":"library/ngc2052.jpg","px":126},{"id":"IC0434","name":"Flame Nebula","ra":85.2537,"dec":-2.4538,"size":90.0,"mag":11.0,"type":"HII","field":126.0,"file":"library/ic0434.jpg","px":630},{"id":"NGC6231","name":"","ra":253.5455,"dec":-41.8242,"size":13.8,"mag":2.6,"type":"OCl","field":20.0,"file":"library/ngc6231.jpg","px":100},{"id":"Sh2-101","name":"Tulip Nebula","ra":299.96,"dec":35.27,"size":16,"mag":null,"type":"HII","field":22.4,"file":"library/sh2-101.jpg","px":112},{"id":"NGC5128","name":"Centaurus A","ra":201.3651,"dec":-43.0191,"size":25.9,"mag":7.2,"type":"G","field":36.2,"file":"library/ngc5128.jpg","px":181},{"id":"M46","name":"","ra":115.4451,"dec":-14.81,"size":21.0,"mag":6.1,"type":"OCl","field":29.4,"file":"library/m46.jpg","px":147},{"id":"M6","name":"Butterfly Cluster","ra":265.0865,"dec":-32.2542,"size":15.6,"mag":4.2,"type":"OCl","field":21.8,"file":"library/m6.jpg","px":109},{"id":"IC2872","name":"","ra":172.0335,"dec":-62.9889,"size":15.1,"mag":null,"type":"Neb","field":21.2,"file":"library/ic2872.jpg","px":106},{"id":"IC0448","name":"","ra":98.1889,"dec":7.3886,"size":15.0,"mag":null,"type":"HII","field":21.0,"file":"library/ic0448.jpg","px":105},{"id":"IC1283","name":"","ra":274.3202,"dec":-19.7622,"size":15.0,"mag":null,"type":"HII","field":21.0,"file":"library/ic1283.jpg","px":105},{"id":"IC0359A","name":"","ra":64.6708,"dec":28.29,"size":15.0,"mag":null,"type":"RfN","field":21.0,"file":"library/ic0359a.jpg","px":105},{"id":"NGC7380","name":"","ra":341.8375,"dec":58.1324,"size":25.0,"mag":7.2,"type":"Cl+N","field":35.0,"file":"library/ngc7380.jpg","px":175},{"id":"IC4685","name":"","ra":272.3229,"dec":-23.9872,"size":15.0,"mag":null,"type":"Neb","field":21.0,"file":"library/ic4685.jpg","px":105},{"id":"NGC6559","name":"","ra":272.4869,"dec":-24.1064,"size":15.0,"mag":null,"type":"Neb","field":21.0,"file":"library/ngc6559.jpg","px":105},{"id":"IC1310","name":"","ra":302.5041,"dec":34.9689,"size":15.0,"mag":null,"type":"Cl+N","field":21.0,"file":"library/ic1310.jpg","px":105},{"id":"NGC0869","name":"h Persei Cluster","ra":34.744,"dec":57.1172,"size":14.4,"mag":3.7,"type":"OCl","field":20.2,"file":"library/ngc0869.jpg","px":101},{"id":"IC1287","name":"","ra":277.857,"dec":-10.7958,"size":20.0,"mag":6.1,"type":"RfN","field":28.0,"file":"library/ic1287.jpg","px":140},{"id":"NGC2477","name":"","ra":118.0408,"dec":-38.5333,"size":18.6,"mag":5.8,"type":"OCl","field":26.0,"file":"library/ngc2477.jpg","px":130},{"id":"M23","name":"","ra":269.2699,"dec":-18.9853,"size":16.8,"mag":5.5,"type":"OCl","field":23.5,"file":"library/m23.jpg","px":118},{"id":"NGC3532","name":"Wishing Well Cluster","ra":166.4493,"dec":-58.7705,"size":12.0,"mag":3.0,"type":"OCl","field":20.0,"file":"library/ngc3532.jpg","px":100},{"id":"IC0447","name":"","ra":97.7513,"dec":9.8974,"size":25.0,"mag":7.7,"type":"HII","field":35.0,"file":"library/ic0447.jpg","px":175},{"id":"NGC1746","name":"","ra":75.9591,"dec":23.7676,"size":18.0,"mag":6.1,"type":"OCl","field":25.2,"file":"library/ngc1746.jpg","px":126},{"id":"NGC0055","name":"","ra":3.7233,"dec":-39.1966,"size":29.9,"mag":8.5,"type":"G","field":41.8,"file":"library/ngc0055.jpg","px":209},{"id":"M25","name":"","ra":277.9449,"dec":-19.1149,"size":14.1,"mag":4.6,"type":"OCl","field":20.0,"file":"library/m25.jpg","px":100},{"id":"NGC6397","name":"","ra":265.1723,"dec":-53.6737,"size":15.3,"mag":5.2,"type":"GCl","field":21.4,"file":"library/ngc6397.jpg","px":107},{"id":"M13","name":"Hercules Globular Cluster","ra":250.4235,"dec":36.4613,"size":16.5,"mag":5.8,"type":"GCl","field":23.1,"file":"library/m13.jpg","px":115},{"id":"IC0405","name":"Flaming Star Nebula","ra":79.1228,"dec":34.3562,"size":50.0,"mag":10.0,"type":"Neb","field":70.0,"file":"library/ic0405.jpg","px":350},{"id":"NGC5822","name":"","ra":226.0885,"dec":-54.3964,"size":18.0,"mag":6.5,"type":"OCl","field":25.2,"file":"library/ngc5822.jpg","px":126},{"id":"M20","name":"Trifid Nebula","ra":270.6755,"dec":-22.9719,"size":28.0,"mag":8.5,"type":"Neb","field":39.2,"file":"library/m20.jpg","px":196},{"id":"NGC3114","name":"","ra":150.6232,"dec":-60.1305,"size":12.3,"mag":4.2,"type":"OCl","field":20.0,"file":"library/ngc3114.jpg","px":100},{"id":"NGC2546","name":"","ra":123.0651,"dec":-37.5943,"size":16.5,"mag":6.3,"type":"OCl","field":23.1,"file":"library/ngc2546.jpg","px":115},{"id":"NGC2451","name":"","ra":116.3125,"dec":-37.9674,"size":37.5,"mag":9.5,"type":"OCl","field":52.5,"file":"library/ngc2451.jpg","px":262},{"id":"NGC2264","name":"Christmas Tree Cluster","ra":100.2427,"dec":9.8955,"size":11.4,"mag":3.9,"type":"Cl+N","field":20.0,"file":"library/ngc2264.jpg","px":100},{"id":"NGC6888","name":"Crescent Nebula","ra":303.0273,"dec":38.3549,"size":20.0,"mag":7.4,"type":"HII","field":28.0,"file":"library/ngc6888.jpg","px":140},{"id":"M3","name":"","ra":205.5468,"dec":28.3754,"size":16.2,"mag":6.4,"type":"GCl","field":22.7,"file":"library/m3.jpg","px":113},{"id":"M5","name":"","ra":229.6406,"dec":2.0827,"size":15.0,"mag":6.0,"type":"GCl","field":21.0,"file":"library/m5.jpg","px":105},{"id":"M41","name":"","ra":101.4998,"dec":-20.7542,"size":12.0,"mag":4.5,"type":"OCl","field":20.0,"file":"library/m41.jpg","px":100},{"id":"NGC6633","name":"","ra":276.8135,"dec":6.5082,"size":12.0,"mag":4.6,"type":"OCl","field":20.0,"file":"library/ngc6633.jpg","px":100},{"id":"NGC1980","name":"Lower Sword","ra":83.8583,"dec":-5.9099,"size":9.3,"mag":2.5,"type":"Cl+N","field":20.0,"file":"library/ngc1980.jpg","px":100},{"id":"M93","name":"","ra":116.1218,"dec":-23.8531,"size":15.0,"mag":6.2,"type":"OCl","field":21.0,"file":"library/m93.jpg","px":105},{"id":"NGC0884","name":"chi Persei Cluster","ra":35.6337,"dec":57.1441,"size":10.5,"mag":3.8,"type":"OCl","field":20.0,"file":"library/ngc0884.jpg","px":100},{"id":"M50","name":"","ra":105.6686,"dec":-8.364,"size":14.1,"mag":5.9,"type":"OCl","field":20.0,"file":"library/m50.jpg","px":100},{"id":"Sh2-274","name":"Medusa Nebula","ra":112.26,"dec":13.25,"size":10,"mag":null,"type":"PN","field":20.0,"file":"library/sh2-274.jpg","px":100},{"id":"IC0443","name":"Gem A","ra":94.1559,"dec":22.5317,"size":50.0,"mag":12.0,"type":"SNR","field":70.0,"file":"library/ic0443.jpg","px":350},{"id":"M92","name":"","ra":259.2803,"dec":43.1365,"size":14.4,"mag":6.5,"type":"GCl","field":20.2,"file":"library/m92.jpg","px":101},{"id":"NGC2070","name":"30 Dor Cluster","ra":84.6765,"dec":-69.1009,"size":16.0,"mag":7.2,"type":"HII","field":22.4,"file":"library/ngc2070.jpg","px":112},{"id":"NGC7293","name":"Helix Nebula","ra":337.4107,"dec":-20.8373,"size":16.3,"mag":7.3,"type":"PN","field":22.9,"file":"library/ngc7293.jpg","px":114},{"id":"IC1284","name":"","ra":274.4151,"dec":-19.672,"size":17.0,"mag":7.7,"type":"Neb","field":23.8,"file":"library/ic1284.jpg","px":119},{"id":"M22","name":"","ra":279.1008,"dec":-23.9034,"size":12.6,"mag":6.2,"type":"GCl","field":20.0,"file":"library/m22.jpg","px":100},{"id":"M37","name":"","ra":88.0765,"dec":32.553,"size":11.4,"mag":5.6,"type":"OCl","field":20.0,"file":"library/m37.jpg","px":100},{"id":"M55","name":"","ra":294.9975,"dec":-30.9621,"size":12.0,"mag":6.5,"type":"GCl","field":20.0,"file":"library/m55.jpg","px":100},{"id":"M12","name":"","ra":251.8105,"dec":-1.9478,"size":11.1,"mag":6.1,"type":"GCl","field":20.0,"file":"library/m12.jpg","px":100},{"id":"M83","name":"Southern Pinwheel Galaxy","ra":204.254,"dec":-29.8654,"size":13.6,"mag":7.2,"type":"G","field":20.0,"file":"library/m83.jpg","px":100},{"id":"M10","name":"","ra":254.2875,"dec":-4.0993,"size":9.3,"mag":5.0,"type":"GCl","field":20.0,"file":"library/m10.jpg","px":100},{"id":"M15","name":"","ra":322.4932,"dec":12.1668,"size":11.1,"mag":6.3,"type":"GCl","field":20.0,"file":"library/m15.jpg","px":100},{"id":"M17","name":"Checkmark Nebula","ra":275.1963,"dec":-16.1715,"size":12.6,"mag":7.0,"type":"Neb","field":20.0,"file":"library/m17.jpg","px":100},{"id":"M14","name":"","ra":264.4007,"dec":-3.2459,"size":9.9,"mag":5.7,"type":"GCl","field":20.0,"file":"library/m14.jpg","px":100},{"id":"M110","name":"","ra":10.092,"dec":41.6853,"size":16.2,"mag":8.2,"type":"G","field":22.7,"file":"library/m110.jpg","px":114},{"id":"M43","name":"Mairan's Nebula","ra":83.8808,"dec":-5.2675,"size":20.0,"mag":9.0,"type":"HII","field":28.0,"file":"library/m43.jpg","px":140},{"id":"Sh2-136","name":"Ghost Nebula","ra":319.11,"dec":68.265,"size":7,"mag":null,"type":"RfN","field":20.0,"file":"library/sh2-136.jpg","px":100},{"id":"M11","name":"Amas de l'Ecu de Sobieski","ra":282.775,"dec":-6.27,"size":9.0,"mag":5.8,"type":"OCl","field":20.0,"file":"library/m11.jpg","px":100},{"id":"M38","name":"","ra":82.177,"dec":35.8549,"size":9.6,"mag":6.4,"type":"OCl","field":20.0,"file":"library/m38.jpg","px":100},{"id":"M52","name":"","ra":351.2017,"dec":61.5932,"size":9.9,"mag":6.9,"type":"OCl","field":20.0,"file":"library/m52.jpg","px":100},{"id":"M2","name":"","ra":323.3625,"dec":-0.8233,"size":8.4,"mag":6.2,"type":"GCl","field":20.0,"file":"library/m2.jpg","px":100},{"id":"M19","name":"","ra":255.657,"dec":-26.2679,"size":7.5,"mag":5.6,"type":"GCl","field":20.0,"file":"library/m19.jpg","px":100},{"id":"M106","name":"","ra":184.7396,"dec":47.304,"size":17.0,"mag":9.3,"type":"G","field":23.8,"file":"library/m106.jpg","px":119},{"id":"M30","name":"","ra":325.0917,"dec":-23.1791,"size":9.0,"mag":7.1,"type":"GCl","field":20.0,"file":"library/m30.jpg","px":100},{"id":"M36","name":"","ra":84.0739,"dec":34.1407,"size":7.2,"mag":6.0,"type":"OCl","field":20.0,"file":"library/m36.jpg","px":100},{"id":"M71","name":"","ra":298.4421,"dec":18.7784,"size":6.9,"mag":6.1,"type":"GCl","field":20.0,"file":"library/m71.jpg","px":100},{"id":"M82","name":"Cigar Galaxy","ra":148.9697,"dec":69.6794,"size":11.0,"mag":8.3,"type":"G","field":20.0,"file":"library/m82.jpg","px":100},{"id":"M63","name":"Sunflower Galaxy","ra":198.9555,"dec":42.0293,"size":11.8,"mag":8.6,"type":"G","field":20.0,"file":"library/m63.jpg","px":100},{"id":"M53","name":"","ra":198.2301,"dec":18.1691,"size":9.0,"mag":7.8,"type":"GCl","field":20.0,"file":"library/m53.jpg","px":100},{"id":"M49","name":"","ra":187.4448,"dec":8.0005,"size":10.2,"mag":8.3,"type":"G","field":20.0,"file":"library/m49.jpg","px":100},{"id":"M64","name":"Black Eye Galaxy","ra":194.1818,"dec":21.683,"size":10.5,"mag":8.5,"type":"G","field":20.0,"file":"library/m64.jpg","px":100},{"id":"M21","name":"","ra":271.056,"dec":-22.4901,"size":6.0,"mag":5.9,"type":"OCl","field":20.0,"file":"library/m21.jpg","px":100},{"id":"M62","name":"","ra":255.3025,"dec":-30.1124,"size":7.8,"mag":7.4,"type":"GCl","field":20.0,"file":"library/m62.jpg","px":100},{"id":"M86","name":"","ra":186.5489,"dec":12.9462,"size":11.5,"mag":8.9,"type":"G","field":20.0,"file":"library/m86.jpg","px":100},{"id":"M66","name":"","ra":170.0623,"dec":12.9915,"size":10.3,"mag":8.9,"type":"G","field":20.0,"file":"library/m66.jpg","px":100},{"id":"NGC1333","name":"","ra":52.23,"dec":31.37,"size":19.5,"mag":10.9,"type":"Cl+N","field":27.3,"file":"library/ngc1333.jpg","px":136},{"id":"M27","name":"Dumbbell Nebula","ra":299.9016,"dec":22.721,"size":6.7,"mag":7.4,"type":"PN","field":20.0,"file":"library/m27.jpg","px":100},{"id":"M18","name":"","ra":274.9937,"dec":-17.102,"size":6.0,"mag":6.9,"type":"OCl","field":20.0,"file":"library/m18.jpg","px":100},{"id":"M32","name":"","ra":10.6743,"dec":40.8653,"size":7.7,"mag":8.1,"type":"G","field":20.0,"file":"library/m32.jpg","px":100},{"id":"M94","name":"","ra":192.7211,"dec":41.1204,"size":7.7,"mag":8.2,"type":"G","field":20.0,"file":"library/m94.jpg","px":100},{"id":"M1","name":"Crab Nebula","ra":83.6332,"dec":22.0145,"size":8.0,"mag":8.4,"type":"SNR","field":20.0,"file":"library/m1.jpg","px":100},{"id":"M104","name":"Sombrero Galaxy","ra":189.9976,"dec":-11.6231,"size":8.4,"mag":8.6,"type":"G","field":20.0,"file":"library/m104.jpg","px":100},{"id":"M79","name":"","ra":81.0441,"dec":-24.5242,"size":7.2,"mag":8.2,"type":"GCl","field":20.0,"file":"library/m79.jpg","px":100},{"id":"M80","name":"","ra":244.2605,"dec":-22.9751,"size":5.7,"mag":7.3,"type":"GCl","field":20.0,"file":"library/m80.jpg","px":100},{"id":"M74","name":"","ra":24.174,"dec":15.7837,"size":9.9,"mag":9.3,"type":"G","field":20.0,"file":"library/m74.jpg","px":100},{"id":"M68","name":"","ra":189.8667,"dec":-26.743,"size":6.6,"mag":8.0,"type":"GCl","field":20.0,"file":"library/m68.jpg","px":100},{"id":"M28","name":"","ra":276.137,"dec":-24.8698,"size":5.1,"mag":6.9,"type":"GCl","field":20.0,"file":"library/m28.jpg","px":100},{"id":"M107","name":"","ra":248.133,"dec":-13.0536,"size":7.8,"mag":8.8,"type":"GCl","field":20.0,"file":"library/m107.jpg","px":100},{"id":"M9","name":"","ra":259.7991,"dec":-18.5162,"size":6.9,"mag":8.4,"type":"GCl","field":20.0,"file":"library/m9.jpg","px":100},{"id":"NGC7635","name":"Bubble Nebula","ra":350.19,"dec":61.2124,"size":15.0,"mag":11.0,"type":"HII","field":21.0,"file":"library/ngc7635.jpg","px":105},{"id":"M96","name":"","ra":161.6906,"dec":11.8199,"size":8.3,"mag":9.2,"type":"G","field":20.0,"file":"library/m96.jpg","px":100},{"id":"M90","name":"","ra":189.2075,"dec":13.1629,"size":9.1,"mag":9.5,"type":"G","field":20.0,"file":"library/m90.jpg","px":100},{"id":"M54","name":"","ra":283.7636,"dec":-30.4785,"size":5.1,"mag":7.7,"type":"GCl","field":20.0,"file":"library/m54.jpg","px":100},{"id":"M60","name":"","ra":190.9166,"dec":11.5527,"size":6.8,"mag":8.8,"type":"G","field":20.0,"file":"library/m60.jpg","px":100},{"id":"M87","name":"Virgo Galaxy","ra":187.7059,"dec":12.3911,"size":7.1,"mag":9.0,"type":"G","field":20.0,"file":"library/m87.jpg","px":100},{"id":"M69","name":"","ra":277.8468,"dec":-32.348,"size":5.7,"mag":8.3,"type":"GCl","field":20.0,"file":"library/m69.jpg","px":100},{"id":"M56","name":"","ra":289.148,"dec":30.1845,"size":5.8,"mag":8.4,"type":"GCl","field":20.0,"file":"library/m56.jpg","px":100},{"id":"M103","name":"","ra":23.3409,"dec":60.658,"size":4.5,"mag":7.4,"type":"OCl","field":20.0,"file":"library/m103.jpg","px":100},{"id":"M65","name":"","ra":169.733,"dec":13.0924,"size":7.6,"mag":9.3,"type":"G","field":20.0,"file":"library/m65.jpg","px":100},{"id":"M85","name":"","ra":186.3505,"dec":18.1915,"size":7.0,"mag":9.1,"type":"G","field":20.0,"file":"library/m85.jpg","px":100},{"id":"M29","name":"","ra":305.9907,"dec":38.5077,"size":3.6,"mag":6.6,"type":"OCl","field":20.0,"file":"library/m29.jpg","px":100},{"id":"M70","name":"","ra":280.8027,"dec":-32.2919,"size":6.6,"mag":9.1,"type":"GCl","field":20.0,"file":"library/m70.jpg","px":100},{"id":"M26","name":"","ra":281.3277,"dec":-9.3836,"size":6.0,"mag":8.9,"type":"OCl","field":20.0,"file":"library/m26.jpg","px":100},{"id":"M78","name":"","ra":86.6909,"dec":0.0793,"size":4.5,"mag":8.0,"type":"RfN","field":20.0,"file":"library/m78.jpg","px":100},{"id":"M98","name":"","ra":183.4512,"dec":14.9003,"size":11.0,"mag":10.8,"type":"G","field":20.0,"file":"library/m98.jpg","px":100},{"id":"M109","name":"","ra":179.3999,"dec":53.3745,"size":8.1,"mag":9.9,"type":"G","field":20.0,"file":"library/m109.jpg","px":100},{"id":"M77","name":"","ra":40.6696,"dec":-0.0133,"size":6.1,"mag":9.3,"type":"G","field":20.0,"file":"library/m77.jpg","px":100},{"id":"M84","name":"","ra":186.2656,"dec":12.887,"size":7.4,"mag":9.8,"type":"G","field":20.0,"file":"library/m84.jpg","px":100},{"id":"M95","name":"","ra":160.9904,"dec":11.7038,"size":7.2,"mag":9.8,"type":"G","field":20.0,"file":"library/m95.jpg","px":100},{"id":"M89","name":"","ra":188.9159,"dec":12.5563,"size":8.1,"mag":10.1,"type":"G","field":20.0,"file":"library/m89.jpg","px":100},{"id":"M100","name":"","ra":185.7285,"dec":15.8218,"size":6.1,"mag":9.5,"type":"G","field":20.0,"file":"library/m100.jpg","px":100},{"id":"M88","name":"","ra":187.9965,"dec":14.4204,"size":8.7,"mag":10.3,"type":"G","field":20.0,"file":"library/m88.jpg","px":100},{"id":"M72","name":"","ra":313.3663,"dec":-12.5371,"size":4.5,"mag":9.0,"type":"GCl","field":20.0,"file":"library/m72.jpg","px":100},{"id":"M75","name":"","ra":301.5202,"dec":-21.9222,"size":3.6,"mag":8.3,"type":"GCl","field":20.0,"file":"library/m75.jpg","px":100},{"id":"M105","name":"","ra":161.9566,"dec":12.5816,"size":4.9,"mag":9.3,"type":"G","field":20.0,"file":"library/m105.jpg","px":100},{"id":"M61","name":"","ra":185.4787,"dec":4.4736,"size":6.9,"mag":10.2,"type":"G","field":20.0,"file":"library/m61.jpg","px":100},{"id":"M99","name":"Coma Pinwheel","ra":184.7067,"dec":14.4165,"size":5.0,"mag":9.8,"type":"G","field":20.0,"file":"library/m99.jpg","px":100},{"id":"M59","name":"","ra":190.5093,"dec":11.647,"size":4.5,"mag":9.6,"type":"G","field":20.0,"file":"library/m59.jpg","px":100},{"id":"M57","name":"Ring Nebula","ra":283.3959,"dec":33.0286,"size":3.0,"mag":8.8,"type":"PN","field":20.0,"file":"library/m57.jpg","px":100},{"id":"M91","name":"","ra":188.8602,"dec":14.4963,"size":5.5,"mag":11.0,"type":"G","field":20.0,"file":"library/m91.jpg","px":100},{"id":"M58","name":"","ra":189.4313,"dec":11.8182,"size":5.0,"mag":10.3,"type":"G","field":20.0,"file":"library/m58.jpg","px":100},{"id":"M108","name":"","ra":167.879,"dec":55.6741,"size":4.0,"mag":10.1,"type":"G","field":20.0,"file":"library/m108.jpg","px":100},{"id":"M97","name":"Owl Nebula","ra":168.6988,"dec":55.019,"size":3.6,"mag":9.9,"type":"PN","field":20.0,"file":"library/m97.jpg","px":100},{"id":"M76","name":"Barbell Nebula","ra":25.582,"dec":51.5755,"size":3.0,"mag":10.1,"type":"PN","field":20.0,"file":"library/m76.jpg","px":100}],"stars":[{"n":"Sirius","r":101.2872,"d":-16.7161,"m":-1.44},{"n":"Canopus","r":95.988,"d":-52.6957,"m":-0.62},{"n":"Arcturus","r":213.9153,"d":19.1824,"m":-0.05},{"n":"Rigil Kentaurus","r":219.9021,"d":-60.834,"m":-0.01},{"n":"Vega","r":279.2347,"d":38.7837,"m":0.03},{"n":"Capella","r":79.1723,"d":45.998,"m":0.08},{"n":"Rigel","r":78.6345,"d":-8.2016,"m":0.18},{"n":"Procyon","r":114.8255,"d":5.225,"m":0.4},{"n":"Achernar","r":24.4285,"d":-57.2368,"m":0.45},{"n":"Betelgeuse","r":88.7929,"d":7.4071,"m":0.45},{"n":"Hadar","r":210.9559,"d":-60.373,"m":0.61},{"n":"Altair","r":297.6958,"d":8.8683,"m":0.76},{"n":"Acrux","r":186.6496,"d":-63.0991,"m":0.77},{"n":"Aldebaran","r":68.9802,"d":16.5093,"m":0.87},{"n":"Spica","r":201.2982,"d":-11.1613,"m":0.98},{"n":"Antares","r":247.3519,"d":-26.432,"m":1.06},{"n":"Pollux","r":116.329,"d":28.0262,"m":1.16},{"n":"Fomalhaut","r":344.4127,"d":-29.6222,"m":1.17},{"n":"Mimosa","r":191.9303,"d":-59.6888,"m":1.25},{"n":"Deneb","r":310.358,"d":45.2803,"m":1.25},{"n":"Toliman","r":219.8962,"d":-60.8372,"m":1.35},{"n":"Regulus","r":152.093,"d":11.9672,"m":1.36},{"n":"Adhara","r":104.6565,"d":-28.9721,"m":1.5},{"n":"Castor","r":113.6494,"d":31.8883,"m":1.58},{"n":"Gacrux","r":187.7915,"d":-57.1132,"m":1.59},{"n":"Shaula","r":263.4022,"d":-37.1038,"m":1.62},{"n":"Bellatrix","r":81.2828,"d":6.3497,"m":1.64},{"n":"Elnath","r":81.573,"d":28.6075,"m":1.65},{"n":"Miaplacidus","r":138.2999,"d":-69.7172,"m":1.67},{"n":"Alnilam","r":84.0534,"d":-1.2019,"m":1.69},{"n":"Alnair","r":332.0583,"d":-46.961,"m":1.73},{"n":"Alnitak","r":85.1897,"d":-1.9426,"m":1.74},{"n":"Regor","r":122.3831,"d":-47.3366,"m":1.75},{"n":"Alioth","r":193.5073,"d":55.9598,"m":1.76},{"n":"Mirfak","r":51.0807,"d":49.8612,"m":1.79},{"n":"Kaus Australis","r":276.043,"d":-34.3846,"m":1.79},{"n":"Dubhe","r":165.932,"d":61.751,"m":1.81},{"n":"Wezen","r":107.0979,"d":-26.3932,"m":1.83},{"n":"Alkaid","r":206.8852,"d":49.3133,"m":1.85},{"n":"Avior","r":125.6285,"d":-59.5095,"m":1.86},{"n":"Sargas","r":264.3297,"d":-42.9978,"m":1.86},{"n":"Menkalinan","r":89.8822,"d":44.9474,"m":1.9},{"n":"Atria","r":252.1662,"d":-69.0277,"m":1.91},{"n":"Alhena","r":99.4279,"d":16.3993,"m":1.93},{"n":"Alsephina","r":131.1759,"d":-54.7088,"m":1.93},{"n":"Peacock","r":306.4119,"d":-56.7351,"m":1.94},{"n":"Polaris","r":37.9545,"d":89.2641,"m":1.97},{"n":"Mirzam","r":95.6749,"d":-17.9559,"m":1.98},{"n":"Alphard","r":141.8968,"d":-8.6586,"m":1.99},{"n":"Hamal","r":31.7934,"d":23.4624,"m":2.01},{"n":"Algieba","r":154.9931,"d":19.8415,"m":2.01},{"n":"Diphda","r":10.8974,"d":-17.9866,"m":2.04},{"n":"Nunki","r":283.8164,"d":-26.2967,"m":2.05},{"n":"Menkent","r":211.6706,"d":-36.37,"m":2.06},{"n":"Alpheratz","r":2.0969,"d":29.0904,"m":2.07},{"n":"Mirach","r":17.433,"d":35.6206,"m":2.07},{"n":"Saiph","r":86.9391,"d":-9.6696,"m":2.07},{"n":"Kochab","r":222.6764,"d":74.1555,"m":2.07},{"n":"Tiaki","r":340.6669,"d":-46.8846,"m":2.07},{"n":"Rasalhague","r":263.7336,"d":12.56,"m":2.08},{"n":"Algol","r":47.0422,"d":40.9556,"m":2.09},{"n":"Almach","r":30.9748,"d":42.3297,"m":2.1},{"n":"Denebola","r":177.2649,"d":14.5721,"m":2.14},{"n":"Navi","r":14.1772,"d":60.7167,"m":2.15},{"n":"Muhlifain","r":190.3793,"d":-48.9599,"m":2.2},{"n":"Naos","r":120.896,"d":-40.0031,"m":2.21},{"n":"Aspidiske","r":139.2725,"d":-59.2752,"m":2.21},{"n":"Alphecca","r":233.672,"d":26.7147,"m":2.22},{"n":"Suhail","r":136.999,"d":-43.4326,"m":2.23},{"n":"Mizar","r":200.9814,"d":54.9254,"m":2.23},{"n":"Sadr","r":305.5571,"d":40.2567,"m":2.23},{"n":"Shedar","r":10.1268,"d":56.5373,"m":2.24},{"n":"Eltanin","r":269.1515,"d":51.4889,"m":2.24},{"n":"Mintaka","r":83.0017,"d":-0.2991,"m":2.25},{"n":"Caph","r":2.2945,"d":59.1498,"m":2.28},{"n":"Dschubba","r":240.0834,"d":-22.6217,"m":2.29},{"n":"Larawag","r":252.5409,"d":-34.2932,"m":2.29},{"n":"Men","r":220.4823,"d":-47.3882,"m":2.3},{"n":"Merak","r":165.4603,"d":56.3824,"m":2.34},{"n":"Izar","r":221.2467,"d":27.0742,"m":2.35},{"n":"Enif","r":326.0465,"d":9.875,"m":2.38},{"n":"Mula","r":265.622,"d":-39.03,"m":2.39},{"n":"Ankaa","r":6.571,"d":-42.306,"m":2.4},{"n":"Phecda","r":178.4577,"d":53.6948,"m":2.41},{"n":"Sabik","r":257.5945,"d":-15.7249,"m":2.43},{"n":"Scheat","r":345.9436,"d":28.0828,"m":2.44},{"n":"Aludra","r":111.0238,"d":-29.3031,"m":2.45},{"n":"Alderamin","r":319.6449,"d":62.5856,"m":2.45},{"n":"Markeb","r":140.5284,"d":-55.0107,"m":2.47},{"n":"Aljanah","r":311.5528,"d":33.9703,"m":2.48},{"n":"Markab","r":346.1902,"d":15.2053,"m":2.49},{"n":"Menkar","r":45.5699,"d":4.0897,"m":2.54},{"n":"Saik","r":249.2897,"d":-10.5671,"m":2.54},{"n":"Alnair","r":208.8849,"d":-47.2884,"m":2.55},{"n":"Zosma","r":168.5271,"d":20.5237,"m":2.56},{"n":"Acrab","r":241.3593,"d":-19.8055,"m":2.56},{"n":"Arneb","r":83.1826,"d":-17.8223,"m":2.58},{"n":"Gienah","r":183.9515,"d":-17.5419,"m":2.58},{"n":"Ascella","r":285.653,"d":-29.8801,"m":2.6},{"n":"Zubeneschamali","r":229.2517,"d":-9.3829,"m":2.61},{"n":"Unukalhai","r":236.067,"d":6.4256,"m":2.63},{"n":"Sheratan","r":28.66,"d":20.808,"m":2.64},{"n":"Phact","r":84.9122,"d":-34.0741,"m":2.65},{"n":"Mahasim","r":89.9303,"d":37.2126,"m":2.65},{"n":"Kraz","r":188.5968,"d":-23.3968,"m":2.65},{"n":"Ruchbah","r":21.454,"d":60.2353,"m":2.66},{"n":"Muphrid","r":208.6712,"d":18.3977,"m":2.68},{"n":"KeKouan","r":224.633,"d":-43.134,"m":2.68},{"n":"Hassaleh","r":74.2484,"d":33.1661,"m":2.69},{"n":"Lesath","r":262.691,"d":-37.2958,"m":2.7},{"n":"Kaus Media","r":275.2485,"d":-29.8281,"m":2.72},{"n":"Tarazed","r":296.5649,"d":10.6133,"m":2.72},{"n":"Yed Prior","r":243.5864,"d":-3.6943,"m":2.73},{"n":"Athebyne","r":245.9979,"d":61.5142,"m":2.73},{"n":"Porrima","r":190.4152,"d":-1.4494,"m":2.74},{"n":"Hatysa","r":83.8583,"d":-5.9099,"m":2.75},{"n":"Zubenelgenubi","r":222.7196,"d":-16.0418,"m":2.75},{"n":"Cebalrai","r":265.8681,"d":4.5673,"m":2.76},{"n":"Cursa","r":76.9624,"d":-5.0864,"m":2.78},{"n":"Kornephoros","r":247.555,"d":21.4896,"m":2.78},{"n":"Rasalgethi","r":258.6619,"d":14.3903,"m":2.78},{"n":"Imai","r":183.7863,"d":-58.7489,"m":2.79},{"n":"Rastaban","r":262.6082,"d":52.3014,"m":2.79},{"n":"Nihal","r":82.0613,"d":-20.7594,"m":2.81},{"n":"Rutilicus","r":250.3215,"d":31.6027,"m":2.81},{"n":"Paikauhale","r":248.9706,"d":-28.216,"m":2.82},{"n":"Kaus Borealis","r":276.9927,"d":-25.4217,"m":2.82},{"n":"Algenib","r":3.309,"d":15.1836,"m":2.83},{"n":"Tureis","r":121.886,"d":-24.3043,"m":2.83},{"n":"Atik","r":58.533,"d":31.8836,"m":2.84},{"n":"Choo","r":262.9604,"d":-49.8761,"m":2.84},{"n":"Alcyone","r":56.8712,"d":24.1051,"m":2.85},{"n":"Vindemiatrix","r":195.5442,"d":10.9592,"m":2.85},{"n":"Deneb Algedi","r":326.7602,"d":-16.1273,"m":2.85},{"n":"Fawaris","r":296.2437,"d":45.1308,"m":2.86},{"n":"Tejat","r":95.7401,"d":22.5136,"m":2.87},{"n":"Acamar","r":44.5653,"d":-40.3047,"m":2.88},{"n":"Albaldah","r":287.441,"d":-21.0236,"m":2.88},{"n":"Gomeisa","r":111.7877,"d":8.2893,"m":2.89},{"n":"Cor Caroli","r":194.0069,"d":38.3184,"m":2.89},{"n":"Fang","r":239.713,"d":-26.1141,"m":2.89},{"n":"Alniyat","r":245.2972,"d":-25.5928,"m":2.9},{"n":"Sadalsuud","r":322.8897,"d":-5.5712,"m":2.9},{"n":"Matar","r":340.7506,"d":30.2212,"m":2.93},{"n":"Algorab","r":187.4661,"d":-16.5154,"m":2.94},{"n":"Sadalmelik","r":331.446,"d":-0.3199,"m":2.95},{"n":"Zaurak","r":59.5074,"d":-13.5085,"m":2.97},{"n":"Tianguan","r":84.4112,"d":21.1425,"m":2.97},{"n":"Algenubi","r":146.4628,"d":23.7743,"m":2.97},{"n":"Alnasl","r":271.452,"d":-30.4241,"m":2.98},{"n":"Girtab","r":266.8962,"d":-40.127,"m":2.99},{"n":"Okab","r":286.3525,"d":13.8635,"m":2.99},{"n":"Mizan","r":32.3859,"d":34.9873,"m":3},{"n":"Pherkad","r":230.1821,"d":71.834,"m":3},{"n":"Xamidimura","r":252.9676,"d":-38.0474,"m":3},{"n":"Aldhanab","r":328.4822,"d":-37.3649,"m":3},{"n":"Furud","r":95.0783,"d":-30.0634,"m":3.02},{"n":"Al Zara","r":105.7561,"d":-23.8333,"m":3.02},{"n":"Minkar","r":182.5312,"d":-22.6198,"m":3.02},{"n":"Almaaz","r":75.4922,"d":43.8233,"m":3.03},{"n":"Seginus","r":218.0195,"d":38.3083,"m":3.04},{"n":"Albireo","r":292.6803,"d":27.9597,"m":3.05},{"n":"Dabih","r":305.2528,"d":-14.7814,"m":3.05},{"n":"Mebsuta","r":100.983,"d":25.1311,"m":3.06},{"n":"Tania Australis","r":155.5823,"d":41.4995,"m":3.06},{"n":"Altais","r":288.1388,"d":67.6615,"m":3.07},{"n":"Hamalwarid","r":274.4068,"d":-36.7617,"m":3.1},{"n":"Persian","r":309.3918,"d":-47.2915,"m":3.11},{"n":"Wazn","r":87.74,"d":-35.7683,"m":3.12},{"n":"Talitha","r":134.8019,"d":48.0418,"m":3.12},{"n":"Sarin","r":258.758,"d":24.8392,"m":3.12},{"n":"Ke Kwan","r":224.7904,"d":-42.1042,"m":3.13},{"n":"Aldhibah","r":257.1966,"d":65.7147,"m":3.17},{"n":"Namalsadirah","r":281.4141,"d":-26.9908,"m":3.17},{"n":"Haedus","r":76.6287,"d":41.2345,"m":3.18},{"n":"Tabit","r":72.46,"d":6.9613,"m":3.19},{"n":"Fuyue","r":267.4645,"d":-37.0433,"m":3.19},{"n":"Errai","r":354.8369,"d":77.6323,"m":3.21},{"n":"Yed Posterior","r":244.5804,"d":-4.6925,"m":3.23},{"n":"Alfirk","r":322.165,"d":70.5607,"m":3.23},{"n":"Brachium","r":226.0176,"d":-25.282,"m":3.25},{"n":"Sulafat","r":284.7359,"d":32.6896,"m":3.25},{"n":"Garafsa","r":260.5024,"d":-24.9995,"m":3.27},{"n":"Skat","r":343.6626,"d":-15.8208,"m":3.27},{"n":"Edasich","r":231.2324,"d":58.9661,"m":3.29},{"n":"Propus","r":93.7194,"d":22.5068,"m":3.31},{"n":"Gorgonea Tertia","r":46.2941,"d":38.8403,"m":3.32},{"n":"Megrez","r":183.8565,"d":57.0326,"m":3.32},{"n":"Sinistra","r":269.7566,"d":-9.7736,"m":3.32},{"n":"Chertan","r":168.56,"d":15.4296,"m":3.33},{"n":"Azmidi","r":117.3236,"d":-24.8598,"m":3.34},{"n":"Segin","r":28.5989,"d":63.6701,"m":3.35},{"n":"Saif al Jabbar","r":81.1192,"d":-2.3971,"m":3.35},{"n":"Alzirr","r":101.3224,"d":12.8956,"m":3.35},{"n":"Muscida","r":127.5661,"d":60.7182,"m":3.35},{"n":"Almizan","r":291.3746,"d":3.1148,"m":3.36},{"n":"Ashlesha","r":131.6938,"d":6.4188,"m":3.38},{"n":"Heze","r":203.6733,"d":-0.5958,"m":3.38},{"n":"Meissa","r":83.7845,"d":9.9342,"m":3.39},{"n":"Minelauva","r":193.9009,"d":3.3975,"m":3.39},{"n":"Chamukuy","r":67.1656,"d":15.8709,"m":3.4},{"n":"Kabalfird","r":311.3224,"d":61.8388,"m":3.41},{"n":"Homam","r":340.3655,"d":10.8314,"m":3.41},{"n":"Mothallah","r":28.2704,"d":29.5788,"m":3.42},{"n":"Adhafera","r":154.1726,"d":23.4173,"m":3.43},{"n":"Al Thalimain Prior","r":286.5622,"d":-4.8826,"m":3.43},{"n":"Tania Borealis","r":154.2741,"d":42.9144,"m":3.45},{"n":"Achird","r":12.2762,"d":57.8152,"m":3.46},{"n":"Dheneb","r":17.1475,"d":-10.1823,"m":3.46},{"n":"Thiba","r":228.8757,"d":33.3148,"m":3.46},{"n":"Kaffaljidhma","r":40.8252,"d":3.2358,"m":3.47},{"n":"Al Jabhah","r":151.8331,"d":16.7627,"m":3.48},{"n":"Unurgunite","r":105.4298,"d":-27.9348,"m":3.49},{"n":"Alula Borealis","r":169.6197,"d":33.0943,"m":3.49},{"n":"Nekkar","r":225.4865,"d":40.3906,"m":3.49},{"n":"Wasat","r":110.0307,"d":21.9823,"m":3.5},{"n":"Sadalbari","r":342.5008,"d":24.6016,"m":3.51},{"n":"Rana","r":55.8121,"d":-9.7634,"m":3.52},{"n":"Subra","r":145.2876,"d":9.8923,"m":3.52},{"n":"Sheliak","r":282.52,"d":33.3627,"m":3.52},{"n":"Biham","r":332.5499,"d":6.1979,"m":3.52},{"n":"Ain","r":67.1542,"d":19.1804,"m":3.53},{"n":"Tarf","r":124.1288,"d":9.1855,"m":3.53},{"n":"Beemim","r":64.4736,"d":-33.7983,"m":3.55},{"n":"Alahakan","r":275.2641,"d":72.7328,"m":3.55},{"n":"Deneb Kaitos Shemali","r":4.857,"d":-8.8239,"m":3.56},{"n":"Labr","r":169.8352,"d":-14.7785,"m":3.56},{"n":"Pipirima","r":253.0839,"d":-38.0175,"m":3.56},{"n":"Alkaphrah","r":135.9064,"d":47.1565,"m":3.57},{"n":"Algedi","r":304.5136,"d":-12.5449,"m":3.58},{"n":"Nembus","r":24.4982,"d":48.6282,"m":3.59},{"n":"Kursi al Jabbar","r":86.1158,"d":-22.4484,"m":3.59},{"n":"Zavijava","r":177.6738,"d":1.7647,"m":3.59},{"n":"Ginan","r":185.34,"d":-60.4011,"m":3.59},{"n":"Al Naymat","r":21.0059,"d":-8.1833,"m":3.6},{"n":"Bharani","r":42.496,"d":27.2605,"m":3.61},{"n":"Alpherg","r":22.8709,"d":15.3458,"m":3.62},{"n":"Atlas","r":57.2906,"d":24.0534,"m":3.62},{"n":"Grafias","r":253.6459,"d":-42.3613,"m":3.62},{"n":"Rotanev","r":309.3873,"d":14.5951,"m":3.64},{"n":"Prima Hyadum","r":64.9483,"d":15.6276,"m":3.65},{"n":"Nasak Shamiya","r":236.5469,"d":15.4218,"m":3.65},{"n":"Sadaltager","r":337.208,"d":-0.02,"m":3.65},{"n":"Nusakan","r":231.9572,"d":29.1057,"m":3.66},{"n":"Thuban","r":211.0973,"d":64.3759,"m":3.67},{"n":"Fulu","r":9.2429,"d":53.8969,"m":3.69},{"n":"Saclateni","r":75.6195,"d":41.0758,"m":3.69},{"n":"Taiyangshou","r":176.5126,"d":47.7794,"m":3.69},{"n":"Nashira","r":325.0227,"d":-16.6623,"m":3.69},{"n":"Angetenar","r":49.8792,"d":-21.7579,"m":3.7},{"n":"Alshain","r":298.8283,"d":6.4068,"m":3.71},{"n":"Ran","r":53.2327,"d":-9.4583,"m":3.72},{"n":"Electra","r":56.2189,"d":24.1133,"m":3.72},{"n":"Grumium","r":268.3822,"d":56.8726,"m":3.73},{"n":"Hydor","r":343.1536,"d":-7.5796,"m":3.73},{"n":"Baten Kaitos","r":27.8651,"d":-10.335,"m":3.74},{"n":"Muliphen","r":266.9732,"d":2.7073,"m":3.75},{"n":"Arsh al Jauzah","r":87.8304,"d":-20.8791,"m":3.76},{"n":"Manubrij","r":286.1708,"d":-21.7415,"m":3.76},{"n":"Miram","r":42.6742,"d":55.8955,"m":3.77},{"n":"Secunda Hyadum","r":65.7337,"d":17.5425,"m":3.77},{"n":"Sualocin","r":309.9095,"d":15.9121,"m":3.77},{"n":"Yen","r":321.6668,"d":-22.4113,"m":3.77},{"n":"Propus","r":111.4317,"d":27.7981,"m":3.78},{"n":"Albali","r":311.919,"d":-9.4958,"m":3.78},{"n":"Misam","r":47.374,"d":44.8575,"m":3.79},{"n":"Praecipua","r":163.3279,"d":34.2149,"m":3.79},{"n":"Alula Australis","r":169.5468,"d":31.5308,"m":3.79},{"n":"Dalim","r":48.0189,"d":-28.9876,"m":3.8},{"n":"Markab","r":114.7078,"d":-26.8038,"m":3.8},{"n":"Nasak Yamani","r":233.7006,"d":10.5389,"m":3.8},{"n":"Fawaris","r":289.2757,"d":53.3685,"m":3.8},{"n":"Theemin","r":68.8877,"d":-30.5623,"m":3.81},{"n":"Alrescha","r":30.5118,"d":2.7638,"m":3.82},{"n":"Giausar","r":172.8509,"d":69.3311,"m":3.82},{"n":"Marfik","r":247.7284,"d":1.9839,"m":3.82},{"n":"Atik","r":56.0797,"d":32.2882,"m":3.84},{"n":"Polis","r":273.4409,"d":-21.0588,"m":3.84},{"n":"Tyl","r":297.0431,"d":70.2679,"m":3.84},{"n":"Sceptrum","r":69.5451,"d":-14.304,"m":3.86},{"n":"Sadachbia","r":335.4141,"d":-1.3873,"m":3.86},{"n":"Maia","r":56.4567,"d":24.3677,"m":3.87},{"n":"Rijl al Awwa","r":220.7651,"d":-5.6582,"m":3.87},{"n":"Iklil","r":239.2212,"d":-29.2141,"m":3.87},{"n":"Tarazed","r":298.1182,"d":1.0057,"m":3.87},{"n":"Mesarthim","r":28.3826,"d":19.2939,"m":3.88},{"n":"Rasalas","r":148.1909,"d":26.007,"m":3.88},{"n":"Azha","r":44.1069,"d":-8.8981,"m":3.89},{"n":"Udra","r":103.5331,"d":-24.1842,"m":3.89},{"n":"Zaniah","r":184.9765,"d":-0.6668,"m":3.89},{"n":"Ukdah","r":144.964,"d":-1.1428,"m":3.9},{"n":"Zubenelhakrabi","r":233.8816,"d":-14.7895,"m":3.91},{"n":"Kitalpha","r":318.956,"d":5.2478,"m":3.92},{"n":"Jabhat Acrabi","r":241.7018,"d":-20.6692,"m":3.93},{"n":"Wurren","r":17.0962,"d":-55.2458,"m":3.94},{"n":"Asellus Australis","r":131.1712,"d":18.1543,"m":3.94},{"n":"Nembus","r":62.1654,"d":47.7125,"m":3.96},{"n":"Arkab Prior","r":290.6596,"d":-44.459,"m":3.96},{"n":"Rukbat","r":290.9716,"d":-40.6159,"m":3.96},{"n":"Beemim","r":66.0092,"d":-34.0168,"m":3.97},{"n":"Sadalnazi","r":341.6328,"d":23.5657,"m":3.97},{"n":"Menkib","r":59.7413,"d":35.791,"m":3.98},{"n":"Alcor","r":201.3064,"d":54.988,"m":3.99},{"n":"Jabbah","r":242.9989,"d":-19.4607,"m":4},{"n":"Mekbuda","r":106.0272,"d":20.5703,"m":4.01},{"n":"Alchiba","r":182.1034,"d":-24.7289,"m":4.02},{"n":"Deneb al Okab Borealis","r":284.9057,"d":15.0683,"m":4.02},{"n":"Zubanah","r":131.6743,"d":28.7599,"m":4.03},{"n":"Aldulfin","r":308.3032,"d":11.3033,"m":4.03},{"n":"Beid","r":62.9664,"d":-6.8376,"m":4.04},{"n":"Asellus Primus","r":216.2992,"d":51.8507,"m":4.04},{"n":"Syrma","r":214.0036,"d":-6.0005,"m":4.07},{"n":"Alkes","r":164.9436,"d":-18.2988,"m":4.08},{"n":"Gudja","r":237.1849,"d":18.1416,"m":4.09},{"n":"Titawin","r":24.1993,"d":41.4055,"m":4.1},{"n":"Muliphein","r":105.9396,"d":-15.6333,"m":4.11},{"n":"Zhang","r":147.8696,"d":-14.8466,"m":4.11},{"n":"Meridiana","r":287.3681,"d":-37.9045,"m":4.11},{"n":"Nucatai","r":97.2408,"d":20.2121,"m":4.13},{"n":"Wei","r":311.5239,"d":-25.2709,"m":4.13},{"n":"Merope","r":56.5816,"d":23.9484,"m":4.14},{"n":"Minazal","r":129.414,"d":5.7038,"m":4.14},{"n":"Propus","r":91.0301,"d":23.2633,"m":4.16},{"n":"Grafias","r":241.0901,"d":-11.3736,"m":4.16},{"n":"Ancha","r":334.2085,"d":-7.7833,"m":4.17},{"n":"Kang","r":213.2239,"d":-10.2737,"m":4.18},{"n":"Xuange","r":214.0959,"d":46.0883,"m":4.18},{"n":"Suudalnujum","r":341.6733,"d":12.1729,"m":4.2},{"n":"Circitores","r":251.4927,"d":82.0373,"m":4.21},{"n":"Al Kidr","r":307.3954,"d":62.9941,"m":4.21},{"n":"Aldhiba","r":275.1893,"d":71.3378,"m":4.22},{"n":"The Garnet Star","r":325.8769,"d":58.78,"m":4.23},{"n":"Chara","r":188.4356,"d":41.3575,"m":4.24},{"n":"Alsciaukat","r":125.7088,"d":43.1881,"m":4.25},{"n":"Castula","r":326.3622,"d":61.1208,"m":4.25},{"n":"Torcular","r":26.3485,"d":9.1577,"m":4.26},{"n":"Acubens","r":134.6218,"d":11.8577,"m":4.26},{"n":"Kurhah","r":330.9477,"d":64.628,"m":4.26},{"n":"Arkab Posterior","r":290.8047,"d":-44.7998,"m":4.27},{"n":"Al Salib","r":311.6646,"d":16.1243,"m":4.27},{"n":"Akfa Farkadain","r":236.0147,"d":77.7945,"m":4.29},{"n":"Fum al Hui","r":337.8764,"d":-32.3461,"m":4.29},{"n":"Taygeta","r":56.3021,"d":24.4673,"m":4.3},{"n":"Prima Giedi","r":304.412,"d":-12.5082,"m":4.3},{"n":"Alkalurops","r":231.1226,"d":37.3772,"m":4.31},{"n":"The Ruby Star","r":83.0531,"d":18.5942,"m":4.32},{"n":"Alterf","r":142.9301,"d":22.968,"m":4.32},{"n":"Diadem","r":197.497,"d":17.5294,"m":4.32},{"n":"Guniibuu","r":258.8374,"d":-26.6028,"m":4.33},{"n":"Marfak","r":17.7757,"d":55.1499,"m":4.34},{"n":"Nasr Alwaki","r":281.1932,"d":37.6051,"m":4.34},{"n":"Botein","r":47.9074,"d":19.7267,"m":4.35},{"n":"Al Taj","r":72.653,"d":8.9002,"m":4.35},{"n":"Al Dafirah","r":186.7345,"d":28.2684,"m":4.35},{"n":"Yildun","r":263.0542,"d":86.5865,"m":4.35},{"n":"Al Kaff al Jidhmah","r":33.25,"d":8.8467,"m":4.36},{"n":"Al Thalimain Posterior","r":294.1803,"d":-1.2866,"m":4.36},{"n":"Apami-Atsa","r":197.4875,"d":-5.539,"m":4.38},{"n":"Al Aghnam","r":302.2223,"d":77.7114,"m":4.38},{"n":"Heka","r":83.7052,"d":9.4896,"m":4.39},{"n":"Aggia","r":260.2516,"d":-21.1129,"m":4.39},{"n":"Sham","r":295.0241,"d":18.0139,"m":4.39},{"n":"Bidelman's Helium Variable Star","r":215.7593,"d":-39.5118,"m":4.41},{"n":"Maasym","r":262.6846,"d":26.1106,"m":4.41},{"n":"Alkarab","r":351.3449,"d":23.4041,"m":4.42},{"n":"Keid","r":63.818,"d":-7.6529,"m":4.43},{"n":"Aladfar","r":288.4395,"d":39.146,"m":4.43},{"n":"Terebellum","r":300.6645,"d":-27.7098,"m":4.43},{"n":"Al Ukud","r":310.8647,"d":15.0746,"m":4.43},{"n":"Kuton","r":12.1706,"d":7.5851,"m":4.44},{"n":"Anser","r":292.1764,"d":24.6649,"m":4.44},{"n":"Minchir","r":129.6893,"d":3.3414,"m":4.45},{"n":"Alhaud","r":137.2177,"d":51.6046,"m":4.46},{"n":"Al Sharasif","r":167.9145,"d":-22.8258,"m":4.46},{"n":"Al Minlear al Asad","r":141.1636,"d":26.1823,"m":4.47},{"n":"Fumalsamakah","r":345.9692,"d":3.82,"m":4.48},{"n":"Beemim","r":68.3773,"d":-29.7665,"m":4.49},{"n":"Albulaan","r":317.3985,"d":-11.3717,"m":4.5},{"n":"Kastra","r":324.2701,"d":-19.466,"m":4.51},{"n":"Lilii Borea","r":41.9773,"d":29.2471,"m":4.52},{"n":"Khambaliya","r":214.7775,"d":-13.3711,"m":4.52},{"n":"Aulad Alnathlat","r":226.1114,"d":26.9476,"m":4.52},{"n":"Asellus Tertius","r":213.3709,"d":51.79,"m":4.53},{"n":"Terebellum","r":299.2368,"d":-27.1699,"m":4.54},{"n":"Zubrah","r":168.801,"d":23.0955,"m":4.56},{"n":"Cujam","r":246.354,"d":14.0333,"m":4.57},{"n":"Dziban","r":265.4848,"d":72.1488,"m":4.57},{"n":"Mizan Batil","r":83.8465,"d":-4.8384,"m":4.58},{"n":"Salm","r":350.1593,"d":23.7403,"m":4.58},{"n":"Museida","r":130.0534,"d":64.3279,"m":4.59},{"n":"Ukdah","r":142.2871,"d":-2.769,"m":4.59},{"n":"Tais","r":290.167,"d":65.7145,"m":4.6},{"n":"Gorgonea Quarta","r":47.8224,"d":39.6116,"m":4.61},{"n":"Castula","r":14.1663,"d":59.1811,"m":4.62},{"n":"Thabit","r":82.9827,"d":-7.3015,"m":4.62},{"n":"Alava","r":270.1209,"d":-3.6903,"m":4.62},{"n":"Alya","r":284.0549,"d":4.2036,"m":4.62},{"n":"Markeb","r":138.9378,"d":-37.4131,"m":4.63},{"n":"Asellus Borealis","r":130.8214,"d":21.4685,"m":4.66},{"n":"Nash","r":271.2551,"d":-29.5801,"m":4.66},{"n":"Tegmine","r":123.053,"d":17.6478,"m":4.67},{"n":"Double Double","r":281.0848,"d":39.6701,"m":4.67},{"n":"Alsafi","r":293.09,"d":69.6612,"m":4.67},{"n":"Gorgonea Secunda","r":44.6903,"d":39.6627,"m":4.68},{"n":"Bunda","r":324.438,"d":-7.8542,"m":4.68},{"n":"Azelfafage","r":325.5236,"d":51.1896,"m":4.69},{"n":"Terebellum","r":298.9598,"d":-26.2995,"m":4.7},{"n":"Menkar","r":44.9288,"d":8.9074,"m":4.71},{"n":"Al Kumm","r":73.1332,"d":14.2506,"m":4.71},{"n":"Libertas","r":298.562,"d":8.4615,"m":4.71},{"n":"Albulan","r":313.1635,"d":-8.9833,"m":4.73},{"n":"Sadalmulk","r":330.8285,"d":-2.1554,"m":4.74},{"n":"Asellus Secundus","r":214.0414,"d":51.3672,"m":4.75},{"n":"Angetenar","r":42.7597,"d":-21.004,"m":4.76},{"n":"Alnitham","r":11.0475,"d":-10.6096,"m":4.77},{"n":"Al Dhih","r":264.2379,"d":68.758,"m":4.77},{"n":"Revenant of the Swan","r":304.4467,"d":38.0329,"m":4.77},{"n":"Alshat","r":305.1659,"d":-12.7591,"m":4.77},{"n":"Vanant","r":267.5463,"d":-40.0904,"m":4.78},{"n":"Zibal","r":48.9584,"d":-8.8197,"m":4.8},{"n":"Kursi al Jauzah","r":75.3598,"d":-7.174,"m":4.8},{"n":"Seat","r":336.3193,"d":1.3774,"m":4.8},{"n":"Sadalmatar","r":340.4392,"d":29.3076,"m":4.8},{"n":"Elgafar","r":217.0506,"d":-2.228,"m":4.81},{"n":"Alhiba","r":78.3572,"d":38.4845,"m":4.82},{"n":"Fafnir","r":276.4964,"d":65.5635,"m":4.82},{"n":"Athafi","r":283.5994,"d":71.2972,"m":4.82},{"n":"Arm","r":316.1013,"d":-19.855,"m":4.82},{"n":"Terebellum","r":299.7383,"d":-26.1958,"m":4.84},{"n":"Kuma","r":263.0668,"d":55.173,"m":4.86},{"n":"Ainalrami","r":283.5424,"d":-22.7448,"m":4.86},{"n":"Al Kiladah","r":288.8851,"d":-25.2567,"m":4.86},{"n":"Fum al Faras","r":331.4198,"d":5.0585,"m":4.86},{"n":"Adhil","r":20.5851,"d":45.5288,"m":4.87},{"n":"Sadr al Kaitos","r":36.4875,"d":-12.2905,"m":4.88},{"n":"Jishui","r":114.7914,"d":34.5843,"m":4.89},{"n":"Kuma","r":263.044,"d":55.1842,"m":4.89},{"n":"Zuben Elakribi","r":225.2431,"d":-8.5189,"m":4.91},{"n":"Alrakis","r":256.3338,"d":54.47,"m":4.91},{"n":"Dolones","r":96.2246,"d":49.2879,"m":4.92},{"n":"Polaris Galacticus Borealis","r":192.9247,"d":27.5407,"m":4.93},{"n":"Felis","r":148.7175,"d":-19.0094,"m":4.94},{"n":"Ruchba","r":307.5148,"d":48.9516,"m":4.94},{"n":"Anwa Farkadain","r":244.3762,"d":75.7553,"m":4.95},{"n":"Alkalbain","r":65.0884,"d":27.3508,"m":4.97},{"n":"Trapezium","r":83.8159,"d":-5.3873,"m":4.98},{"n":"Elkurud","r":91.8818,"d":-37.2529,"m":5},{"n":"Isis","r":104.0277,"d":-14.0434,"m":5},{"n":"Marsic","r":242.0189,"d":17.047,"m":5},{"n":"Pherkad Minor","r":229.2745,"d":71.8239,"m":5.02},{"n":"Chalawan","r":164.8666,"d":40.4303,"m":5.03},{"n":"Situla","r":339.4391,"d":-4.2281,"m":5.04},{"n":"Pleione","r":57.2967,"d":24.1367,"m":5.05},{"n":"Al Sharasif","r":145.0765,"d":-14.3323,"m":5.07},{"n":"Adfar Aldib","r":262.9911,"d":68.135,"m":5.07},{"n":"Okul","r":306.83,"d":-18.2117,"m":5.08},{"n":"Al Athfar","r":276.0574,"d":39.5072,"m":5.11},{"n":"Cervantes","r":266.0363,"d":-51.8341,"m":5.12},{"n":"Becklin's Star","r":83.8186,"d":-5.3897,"m":5.13},{"n":"Zubenelgenubi","r":222.6716,"d":-15.9972,"m":5.15},{"n":"Nahn","r":137.3397,"d":22.0454,"m":5.16},{"n":"Marfak","r":17.0683,"d":54.9203,"m":5.17},{"n":"Manica","r":73.6954,"d":11.426,"m":5.18},{"n":"Zuben Hakrabi","r":226.6567,"d":-16.2568,"m":5.19},{"n":"Revati","r":18.4329,"d":7.5754,"m":5.21},{"n":"Veritate","r":352.8226,"d":39.2362,"m":5.22},{"n":"Taiyi","r":193.869,"d":65.4385,"m":5.23},{"n":"Ceginus","r":234.4567,"d":40.3534,"m":5.25},{"n":"Al Butain","r":42.3232,"d":17.4643,"m":5.26},{"n":"Thail","r":22.5254,"d":47.0073,"m":5.27},{"n":"Barani","r":40.1711,"d":27.0609,"m":5.3},{"n":"Intercrus","r":142.1666,"d":45.6015,"m":5.4},{"n":"La Superba","r":191.2826,"d":45.4403,"m":5.42},{"n":"Tianyi","r":191.8931,"d":66.7903,"m":5.43},{"n":"Ruchba","r":307.8284,"d":49.2203,"m":5.44},{"n":"Celaeno","r":56.2009,"d":24.2895,"m":5.45},{"n":"Polaris Australis","r":317.1952,"d":-88.9565,"m":5.45},{"n":"Al Kalb al Rai","r":337.4707,"d":78.8243,"m":5.45},{"n":"Helvetios","r":344.3666,"d":20.7688,"m":5.45},{"n":"Kissin","r":187.7523,"d":24.5672,"m":5.47},{"n":"Musica","r":314.6081,"d":10.8393,"m":5.51},{"n":"Muscida","r":129.7988,"d":65.0209,"m":5.63},{"n":"Koleon","r":40.5914,"d":20.0115,"m":5.74},{"n":"Aludhi","r":45.2918,"d":-7.663,"m":5.75},{"n":"Alruba","r":265.9966,"d":53.8017,"m":5.75},{"n":"Asterope","r":56.477,"d":24.5545,"m":5.76},{"n":"Merga","r":222.3278,"d":46.1162,"m":5.76},{"n":"Tonatiuh","r":181.313,"d":76.9057,"m":5.78},{"n":"Dsiban","r":265.4921,"d":72.1569,"m":5.81},{"n":"Variabilis Coronae","r":237.1434,"d":28.1567,"m":5.89},{"n":"Piautos","r":125.1339,"d":24.0223,"m":5.92},{"n":"Copernicus","r":133.1492,"d":28.3308,"m":5.96},{"n":"Misam al Thurayya","r":34.5191,"d":57.5163,"m":5.99}],"constellations":{"lines":[[[30.9748,42.3297],[17.433,35.6206],[9.832,30.861],[2.0969,29.0904]],[[14.3017,23.4176],[11.8347,24.2672],[9.6389,29.3118],[9.832,30.861],[9.2202,33.7193],[354.5342,43.2681],[345.4803,42.326]],[[354.5342,43.2681],[355.1021,44.3339],[354.391,46.4582]],[[17.433,35.6206],[14.1884,38.4993],[12.4535,41.0789],[17.3755,47.2418],[24.4982,48.6282]],[[355.1021,44.3339],[356.5085,46.4203]],[[142.3113,-35.9513],[156.7879,-31.0678],[164.1794,-37.1378]],[[221.9655,-79.0448],[245.0867,-78.6957],[250.7694,-77.5174],[248.3628,-78.8971]],[[311.919,-9.4958],[313.1635,-8.9833],[322.8897,-5.5712],[331.446,-0.3199],[335.4141,-1.3873],[337.208,-0.02],[338.8391,-0.1175],[343.1536,-7.5796],[349.4759,-9.1825],[347.3617,-21.1724]],[[322.8897,-5.5712],[331.6093,-13.8697]],[[331.446,-0.3199],[334.2085,-7.7833]],[[337.208,-0.02],[336.3193,1.3774]],[[350.7426,-20.1006],[349.4759,-9.1825],[355.4409,-17.8165]],[[296.5649,10.6133],[297.6958,8.8683],[298.8283,6.4068],[302.8262,-0.8215],[298.1182,1.0057],[291.3746,3.1148],[286.3525,13.8635],[297.6958,8.8683],[291.3746,3.1148],[286.5622,-4.8826]],[[261.3486,-56.3777],[262.7746,-60.6838],[252.4465,-59.0414],[254.655,-55.9901],[254.896,-53.1604],[262.9604,-49.8761],[261.325,-55.5299]],[[42.496,27.2605],[31.7934,23.4624],[28.66,20.808],[28.3826,19.2939]],[[89.8822,44.9474],[79.1723,45.998],[76.6287,41.2345],[74.2484,33.1661],[81.573,28.6075],[89.9303,37.2126],[89.8822,44.9474],[89.8818,54.2847],[79.1723,45.998],[75.4922,43.8233],[75.6195,41.0758]],[[206.8156,17.4569],[208.6712,18.3977],[213.9153,19.1824],[217.9575,30.3714],[218.0195,38.3083],[225.4865,40.3906],[228.8757,33.3148],[221.2467,27.0742],[213.9153,19.1824],[220.2873,13.7283]],[[218.0195,38.3083],[214.0959,46.0883],[213.3659,51.7879],[216.2992,51.8507],[214.0959,46.0883]],[[67.7087,-44.9537],[70.1405,-41.8638],[70.5145,-37.1443],[76.1017,-35.483]],[[74.3217,53.7521],[75.8545,60.4422],[73.5125,66.3427],[57.5896,71.3323],[57.3803,65.526],[52.2672,59.9403]],[[73.5125,66.3427],[94.7116,69.3198],[105.0168,76.9774]],[[134.6218,11.8577],[131.1712,18.1543],[130.8214,21.4685],[131.6666,28.7651]],[[131.1712,18.1543],[124.1288,9.1855]],[[194.0019,38.3149],[188.4356,41.3575]],[[95.6749,-17.9559],[101.2872,-16.7161],[105.7561,-23.8333],[107.0979,-26.3932],[105.4298,-27.9348],[104.6565,-28.9721],[95.0783,-30.0634]],[[111.0238,-29.3031],[107.0979,-26.3932]],[[101.2872,-16.7161],[104.0343,-17.0542],[105.9396,-15.6333],[103.5475,-12.0386],[104.0343,-17.0542]],[[114.8255,5.225],[111.7877,8.2893]],[[304.412,-12.5082],[305.2528,-14.7814],[307.2151,-17.8137],[311.5239,-25.2709],[312.9554,-26.9191],[321.6668,-22.4113],[326.7602,-16.1273],[325.0227,-16.6623],[320.5617,-16.8345],[316.4868,-17.2329],[304.412,-12.5082]],[[99.4403,-43.1959],[95.988,-52.6957],[138.2999,-69.7172],[153.4342,-70.0379],[160.7392,-64.3945],[158.0061,-61.6853],[154.2707,-61.3323],[139.2725,-59.2752],[125.6285,-59.5095],[119.1946,-52.9824],[122.3831,-47.3366],[131.1759,-54.7088],[139.2725,-59.2752]],[[160.7392,-64.3945],[166.6351,-62.4241],[167.1417,-61.9472],[168.1501,-60.3176],[167.1475,-58.975],[163.3736,-58.8532],[158.0061,-61.6853]],[[28.5989,63.6701],[21.454,60.2353],[14.1772,60.7167],[10.1268,56.5373],[2.2945,59.1498]],[[170.2517,-54.491],[182.0896,-50.7224],[187.0099,-50.2306],[190.3793,-48.9599],[204.9719,-53.4664],[208.8849,-47.2884],[207.4041,-42.4737],[207.3762,-41.6877],[211.6706,-36.37],[218.8768,-42.1578],[224.7904,-42.1042]],[[207.3762,-41.6877],[200.1492,-36.7123]],[[219.8962,-60.8372],[204.9719,-53.4664],[210.9559,-60.373]],[[187.0099,-50.2306],[182.913,-52.3685],[172.942,-59.4421]],[[307.3954,62.9941],[311.3224,61.8388],[319.6449,62.5856],[325.8769,58.78],[333.7591,57.0436],[332.7137,58.2013],[337.2928,58.4152],[342.4201,66.2004],[354.8369,77.6323],[322.165,70.5607],[319.6449,62.5856]],[[322.165,70.5607],[342.4201,66.2004]],[[40.8252,3.2358],[38.9686,5.5932],[37.0398,8.4601],[41.2356,10.1141],[44.9288,8.9074],[45.5699,4.0897],[40.8252,3.2358],[39.8707,0.3285],[34.8366,-2.9776],[27.8651,-10.335],[26.017,-15.9375],[10.8974,-17.9866],[4.857,-8.8239],[17.1475,-10.1823],[21.0059,-8.1833],[27.8651,-10.335]],[[124.6315,-76.9197],[158.8671,-78.6078],[161.318,-80.4696],[184.5868,-79.3122],[179.9066,-78.2218],[158.8671,-78.6078]],[[229.3785,-58.8012],[220.6267,-64.9751],[230.8444,-59.3208]],[[95.5285,-33.4364],[87.74,-35.7683],[84.9122,-34.0741],[82.8031,-35.4705]],[[87.74,-35.7683],[89.7867,-42.8151]],[[197.497,17.5294],[197.9683,27.8782],[186.7345,28.2684]],[[284.6807,-37.1074],[286.6046,-37.0634],[287.3681,-37.9045],[287.5073,-39.3408],[287.0874,-40.4967],[285.7787,-42.0951],[282.3958,-43.4341],[278.3758,-42.3125]],[[233.2324,31.3591],[231.9572,29.1057],[233.672,26.7147],[235.6857,26.2956],[237.3985,26.0684],[239.3969,26.8779],[240.3607,29.8511]],[[182.1034,-24.7289],[182.5312,-22.6198],[183.9515,-17.5419],[187.4661,-16.5154],[188.5968,-23.3968],[182.5312,-22.6198]],[[174.1705,-9.8022],[171.1525,-10.8593],[169.8352,-14.7785],[164.9436,-18.2988],[167.9145,-22.8258],[170.8412,-18.78],[171.2205,-17.684],[176.1907,-18.3507],[179.004,-17.1508]],[[169.8352,-14.7785],[171.2205,-17.684]],[[191.9303,-59.6888],[183.7863,-58.7489]],[[186.6496,-63.0991],[187.7915,-57.1132]],[[318.2341,30.2269],[311.5528,33.9703],[305.5571,40.2567],[296.2437,45.1308],[292.4265,51.7298],[289.2757,53.3685]],[[310.358,45.2803],[305.5571,40.2567],[299.0765,35.0834],[292.6803,27.9597]],[[308.3032,11.3033],[309.3873,14.5951],[309.9095,15.9121],[311.6619,16.1241],[310.8647,15.0746],[309.3873,14.5951]],[[64.0066,-51.4866],[68.4991,-55.045],[83.4063,-62.4898],[86.1932,-65.7355],[88.5252,-63.0896],[83.4063,-62.4898],[76.3777,-57.4727],[68.4991,-55.045]],[[268.3822,56.8726],[269.1515,51.4889],[262.6082,52.3014],[263.0668,55.173],[268.3822,56.8726],[288.1388,67.6615],[275.1893,71.3378],[257.1966,65.7147],[245.9979,61.5142],[240.4723,58.5653],[231.2324,58.9661],[211.0973,64.3759],[188.3706,69.7882],[172.8509,69.3311]],[[275.1893,71.3378],[275.2641,72.7328]],[[288.1388,67.6615],[297.0431,70.2679]],[[318.956,5.2478],[318.6201,10.007],[317.5854,10.1316]],[[76.9624,-5.0864],[71.3756,-3.2547],[69.0798,-3.3525],[62.9664,-6.8376],[59.5074,-13.5085],[56.5356,-12.1016],[55.8121,-9.7634],[53.2327,-9.4583],[44.1069,-8.8981],[41.0306,-13.8587],[41.2758,-18.5726],[45.5979,-23.6245],[49.8792,-21.7579],[53.447,-21.6329],[56.712,-23.2497],[68.8877,-30.5623],[66.0092,-34.0168],[64.4736,-33.7983],[57.3635,-36.2003],[54.2737,-40.2745],[49.9819,-43.0698],[44.5653,-40.3047],[40.1668,-39.8554],[36.7463,-47.7038],[34.1274,-51.5122],[28.9895,-51.6089],[24.4285,-57.2368]],[[48.0189,-28.9876],[42.2726,-32.4059],[31.1227,-29.2968]],[[93.7194,22.5068],[95.7401,22.5136],[100.983,25.1311],[107.7849,30.2452],[113.6494,31.8883],[116.329,28.0262],[113.9806,26.8957],[110.0307,21.9823],[106.0272,20.5703],[99.4279,16.3993],[101.3224,12.8956]],[[110.0307,21.9823],[109.5232,16.5404]],[[345.22,-52.7541],[342.1387,-51.3169],[340.6669,-46.8846],[337.4393,-43.7492],[332.0583,-46.961],[340.6669,-46.8846]],[[337.3174,-43.4956],[333.9038,-41.3467],[331.5287,-39.5434],[328.4822,-37.3649]],[[245.4801,19.1531],[247.555,21.4896],[250.3215,31.6027],[250.724,38.9223],[248.5258,42.437],[244.9352,46.3134],[242.1924,44.9349],[238.1689,42.4515]],[[250.3215,31.6027],[255.0724,30.9264]],[[250.724,38.9223],[258.7618,36.8092]],[[269.0633,37.2505],[260.9206,37.1459],[258.7618,36.8092],[255.0724,30.9264],[258.758,24.8392],[266.6147,27.7207],[269.4412,29.2479],[271.8856,28.7625]],[[258.6619,14.3903],[247.555,21.4896]],[[63.5005,-42.2944],[40.6394,-50.8003],[39.3515,-52.5431],[40.1651,-54.5499],[45.9034,-59.7378],[44.6992,-64.0713]],[[131.6938,6.4188],[132.1082,5.8378],[130.8061,3.3987],[129.6893,3.3414],[129.414,5.7038],[131.6938,6.4188],[133.8484,5.9456],[138.5911,2.3143],[144.964,-1.1428],[141.8968,-8.6586],[147.8696,-14.8466],[152.647,-12.3541],[156.5226,-16.8363],[162.4062,-16.1936],[173.2505,-31.8576],[178.2272,-33.9081],[199.7304,-23.1715],[211.5929,-26.6824],[222.5721,-27.9604]],[[6.4378,-77.2542],[56.8098,-74.239],[39.8973,-68.2669],[35.4373,-68.6594],[28.7339,-67.6473],[29.6925,-61.5699]],[[309.3918,-47.2915],[311.0097,-51.921],[313.7025,-58.4542],[329.4795,-54.9926],[319.9666,-53.4494],[309.3918,-47.2915]],[[335.8901,52.229],[337.8229,50.2825],[337.3826,47.7069],[335.2564,46.5366],[337.6219,43.1234],[340.1286,44.2763],[337.3826,47.7069],[336.1291,49.4764],[335.8901,52.229]],[[337.6219,43.1234],[333.4697,39.7149],[333.9924,37.7487]],[[152.093,11.9672],[151.8331,16.7627],[154.9931,19.8415],[168.5271,20.5237],[177.2649,14.5721],[168.56,15.4296],[152.093,11.9672]],[[154.9931,19.8415],[154.1726,23.4173],[148.1909,26.007],[146.4628,23.7743]],[[151.8573,35.2447],[156.4784,33.7961],[163.3279,34.2149],[156.9708,36.7072],[151.8573,35.2447],[143.5558,36.3976]],[[91.5388,-14.9353],[89.1012,-14.1677],[86.7389,-14.822],[83.1826,-17.8223],[78.2329,-16.2055],[76.3653,-22.371],[82.0613,-20.7594],[86.1158,-22.4484],[87.8304,-20.8791]],[[78.3078,-12.9413],[78.2329,-16.2055],[79.8939,-13.1768]],[[226.0176,-25.282],[222.7196,-16.0418],[229.2517,-9.3829],[233.8816,-14.7895],[234.256,-28.1351],[234.664,-29.7778]],[[222.7196,-16.0418],[233.8816,-14.7895]],[[237.7397,-33.6272],[234.9416,-34.4119],[230.4515,-36.2614],[230.343,-40.6475],[224.633,-43.134],[220.4823,-47.3882],[228.0712,-52.0992],[229.6334,-47.8753],[230.6703,-44.6896],[233.7852,-41.1668],[240.0305,-38.3967],[241.6481,-36.8023]],[[230.343,-40.6475],[233.7852,-41.1668]],[[94.9058,59.011],[104.3192,58.4228],[111.6785,49.2115],[125.7088,43.1881],[135.1599,41.7829],[139.711,36.8026],[140.2638,34.3926]],[[281.1932,37.6051],[281.0949,39.6127],[279.2347,38.7837],[281.1932,37.6051],[283.6262,36.8986],[284.7359,32.6896],[282.52,33.3627],[281.1932,37.6051]],[[92.5603,-74.753],[82.9709,-76.341],[73.7967,-74.9369],[75.6792,-71.3143]],[[312.492,-33.7797],[312.1214,-43.9885],[320.1902,-40.8095],[319.4845,-32.1725],[315.3228,-32.2578],[312.492,-33.7797]],[[115.3118,-9.5511],[122.1485,-2.9838],[107.9661,-0.4928],[97.2045,-7.0331],[93.7139,-6.2748]],[[107.9661,-0.4928],[101.9652,2.4122],[95.942,4.5929],[98.2259,7.333],[100.2444,9.8958]],[[176.4017,-66.7288],[184.3928,-67.9607],[189.2959,-69.1356],[191.57,-68.1081],[195.5678,-71.5489],[188.1167,-72.133],[189.2959,-69.1356]],[[241.6227,-45.1732],[246.796,-47.5548],[244.9601,-50.1555],[240.8037,-49.2297],[241.6227,-45.1732]],[[216.7301,-83.6679],[341.5146,-81.3816],[325.3694,-77.39],[216.7301,-83.6679]],[[269.7566,-9.7736],[266.9732,2.7073],[265.8681,4.5673],[263.7336,12.56],[254.4171,9.375],[247.7284,1.9839],[243.5864,-3.6943],[244.5804,-4.6925],[249.2897,-10.5671],[257.5945,-15.7249]],[[254.4171,9.375],[249.2897,-10.5671],[247.7849,-16.6127],[246.756,-18.4563],[246.0258,-20.0373],[246.3963,-23.4472]],[[265.8681,4.5673],[257.5945,-15.7249],[260.5024,-24.9995],[261.8386,-29.867]],[[91.893,14.7685],[88.5958,20.2762],[90.9799,20.1385],[92.985,14.2088],[90.5958,9.6473],[88.7929,7.4071],[81.2828,6.3497],[73.7239,10.1508]],[[74.6371,1.714],[73.5629,2.4407],[72.8015,5.6051],[72.46,6.9613],[72.653,8.9002],[73.7239,10.1508],[74.0928,13.5145],[76.1423,15.4041],[77.4248,15.5972]],[[78.6345,-8.2016],[81.1192,-2.3971],[83.0017,-0.2991],[81.2828,6.3497],[83.7845,9.9342],[88.7929,7.4071],[85.1897,-1.9426],[86.9391,-9.6696]],[[85.1897,-1.9426],[84.0534,-1.2019],[83.0017,-0.2991]],[[306.4119,-56.7351],[311.2396,-66.2032],[302.1817,-66.1821],[283.0543,-62.1876],[275.8068,-61.4939],[272.1451,-63.6686],[266.4333,-64.7239],[280.7589,-71.4281],[300.1481,-72.9105],[311.2396,-66.2032],[321.6109,-65.3662]],[[332.4969,33.1782],[340.7506,30.2212],[345.9436,28.0828],[2.0969,29.0904],[3.309,15.1836],[346.1902,15.2053],[341.6733,12.1729],[340.3655,10.8314],[332.5499,6.1979],[326.0465,9.875]],[[346.1902,15.2053],[345.9436,28.0828],[342.5008,24.6016],[341.6328,23.5657],[331.7528,25.3451],[326.1614,25.645]],[[56.0797,32.2882],[58.533,31.8836],[59.7413,35.791],[59.4635,40.0102],[56.2985,42.5785],[55.7313,47.7876],[54.1224,48.1926],[51.0807,49.8612],[46.1991,53.5064],[42.6742,55.8955],[43.5644,52.7625],[47.2667,49.6133],[47.374,44.8575],[47.0422,40.9556],[47.8224,39.6116],[46.2941,38.8403],[44.6903,39.6627],[44.9162,41.0329],[47.0422,40.9556]],[[61.646,50.3513],[63.7244,48.4093],[62.1654,47.7125],[55.7313,47.7876]],[[47.2667,49.6133],[41.0499,49.2284],[25.9152,50.6887]],[[6.571,-42.306],[16.521,-46.7184],[22.0914,-43.3182],[22.8129,-49.0727],[17.0962,-55.2458],[16.521,-46.7184],[2.3527,-45.7474],[6.571,-42.306]],[[102.0477,-61.9414],[87.4569,-56.1667],[86.8212,-51.0665]],[[18.4373,24.5837],[17.9152,30.0896],[19.8666,27.2641],[18.4373,24.5837],[17.8634,21.0347],[22.8709,15.3458],[26.3485,9.1577],[30.5118,2.7638],[28.389,3.1875],[25.3579,5.4876],[22.5463,6.1438],[18.4329,7.5754],[15.7359,7.8901],[12.1706,7.5851],[359.8279,6.8633],[354.9877,5.6263],[351.9921,6.379],[350.0858,5.3813],[349.2914,3.2823],[351.7331,1.2556],[355.5117,1.78],[356.598,3.4868],[354.9877,5.6263]],[[349.2914,3.2823],[345.9692,3.82]],[[340.1639,-27.0436],[344.4127,-29.6222],[343.9871,-32.5396],[343.1314,-32.8755],[337.8764,-32.3461],[332.0959,-32.9885],[326.2367,-33.0258],[326.934,-30.8983],[332.0959,-32.9885],[340.1639,-27.0436]],[[99.4403,-43.1959],[109.2857,-37.0975],[113.8454,-28.3693],[114.7078,-26.8038],[117.3236,-24.8598],[119.2147,-22.8801],[121.886,-24.3043],[120.896,-40.0031],[122.3831,-47.3366]],[[117.3236,-24.8598],[117.0215,-25.9372],[115.952,-28.9548],[113.8454,-28.3693]],[[120.896,-40.0031],[130.0256,-35.3084],[130.8981,-33.1864],[132.633,-27.7098]],[[63.6062,-62.4739],[64.121,-59.3022],[59.6865,-61.4002],[56.0499,-64.8069],[63.6062,-62.4739]],[[295.0241,18.0139],[296.8469,18.5343],[299.6893,19.4921]],[[295.2622,17.476],[296.8469,18.5343]],[[274.4068,-36.7617],[276.043,-34.3846],[275.2485,-29.8281],[276.9927,-25.4217],[273.4409,-21.0588]],[[290.6596,-44.459],[290.9716,-40.6159],[285.653,-29.8801],[281.4141,-26.9908],[276.9927,-25.4217]],[[298.8154,-41.8683],[299.9341,-35.2763],[298.9598,-26.2995],[294.1768,-24.8836],[291.3187,-24.5086],[288.8851,-25.2567],[283.8164,-26.2967],[281.4141,-26.9908],[275.2485,-29.8281],[271.452,-30.4241],[276.043,-34.3846],[285.653,-29.8801],[286.735,-27.6704],[283.8164,-26.2967],[286.1708,-21.7415],[287.441,-21.0236],[289.4087,-18.9529],[290.4182,-17.8472],[290.4318,-15.955]],[[286.1708,-21.7415],[284.4325,-21.1067],[283.5424,-22.7448],[283.8164,-26.2967]],[[239.713,-26.1141],[240.0834,-22.6217],[241.3593,-19.8055]],[[240.0834,-22.6217],[245.2972,-25.5928],[247.3519,-26.432],[248.9706,-28.216],[252.5409,-34.2932],[252.9676,-38.0474],[253.6459,-42.3613],[258.0383,-43.2392],[264.3297,-42.9978],[266.8962,-40.127],[265.622,-39.03],[263.4022,-37.1038]],[[14.6515,-29.3574],[357.2314,-28.1303],[349.706,-32.532],[353.2427,-37.8183]],[[278.8018,-8.2441],[281.7936,-4.7479],[280.5684,-9.0525],[277.2994,-14.5658],[278.8018,-8.2441]],[[236.5469,15.4218],[235.3877,19.6704],[237.1849,18.1416],[239.1133,15.6616],[236.5469,15.4218],[233.7006,10.5389],[236.067,6.4256],[237.704,4.4777],[243.5864,-3.6943]],[[257.5945,-15.7249],[264.3967,-15.3986],[269.7566,-9.7736],[270.7705,-8.1803],[275.3275,-2.8988],[284.0549,4.2036]],[[151.9845,-0.3716],[148.1268,-8.105],[157.3696,-2.7391],[157.5728,-0.637]],[[84.4112,21.1425],[68.9802,16.5093],[67.1656,15.8709],[64.9483,15.6276],[65.7337,17.5425],[67.1542,19.1804],[81.573,28.6075]],[[64.9483,15.6276],[60.1701,12.4903],[51.7923,9.7327],[60.7891,5.9893]],[[51.7923,9.7327],[51.2033,9.0289],[54.2183,0.4017]],[[272.8073,-45.9544],[276.7434,-45.9685],[277.2077,-49.0706]],[[28.2704,29.5788],[32.3859,34.9873],[34.3286,33.8472],[28.2704,29.5788]],[[252.1662,-69.0277],[238.7857,-63.4307],[229.7274,-68.6795],[252.1662,-69.0277]],[[334.6254,-60.2596],[349.3574,-58.2357],[7.8861,-62.9582],[5.0178,-64.8748],[359.9791,-65.5771],[336.8332,-64.9664],[334.6254,-60.2596]],[[183.8565,57.0326],[165.932,61.751],[165.4603,56.3824],[178.4577,53.6948],[183.8565,57.0326],[193.5073,55.9598],[200.9814,54.9254],[206.8852,49.3133]],[[178.4577,53.6948],[176.5126,47.7794],[169.6197,33.0943],[169.5468,31.5308]],[[176.5126,47.7794],[167.4159,44.4985],[155.5823,41.4995]],[[167.4159,44.4985],[154.2741,42.9144]],[[165.932,61.751],[142.8821,63.0619],[127.5661,60.7182],[147.7473,59.0387],[165.4603,56.3824]],[[165.4603,56.3824],[148.0265,54.0643],[143.2143,51.6773],[134.8019,48.0418]],[[135.9064,47.1565],[143.2143,51.6773]],[[236.0147,77.7945],[244.3762,75.7553],[230.1821,71.834],[222.6764,74.1555],[236.0147,77.7945],[251.4927,82.0373],[263.0542,86.5865],[37.9545,89.2641]],[[131.1759,-54.7088],[140.5284,-55.0107],[149.2156,-54.5678],[161.6924,-49.4203],[153.684,-42.1219],[142.675,-40.4668],[136.999,-43.4326],[122.3831,-47.3366]],[[176.4648,6.5294],[177.6738,1.7647],[184.9765,-0.6668],[190.4152,-1.4494],[197.4875,-5.539],[201.2982,-11.1613],[214.0036,-6.0005],[220.7651,-5.6582]],[[195.5442,10.9592],[193.9009,3.3975],[190.4152,-1.4494]],[[197.4875,-5.539],[203.6733,-0.5958],[210.4116,1.5445],[221.5622,1.8929]],[[135.6116,-66.3961],[126.4341,-66.1369],[121.9825,-68.6171],[109.2076,-67.9572],[107.1869,-70.4989],[121.9825,-68.6171],[135.6116,-66.3961]],[[289.0543,21.3904],[292.1764,24.6649],[298.3654,24.0796],[300.2752,27.7536],[303.9422,27.8142]]],"names":[{"n":"Andromeda","r":0.75,"d":43},{"n":"Antlia","r":156.0,"d":-36},{"n":"Apus","r":240.0,"d":-74},{"n":"Aquarius","r":337.5,"d":-5},{"n":"Aquila","r":291.0,"d":8},{"n":"Ara","r":258.0,"d":-56},{"n":"Aries","r":42.0,"d":22},{"n":"Auriga","r":82.5,"d":37},{"n":"Boötes","r":223.5,"d":35},{"n":"Caelum","r":73.5,"d":-42},{"n":"Camelopardalis","r":84.0,"d":72},{"n":"Cancer","r":128.25,"d":27},{"n":"Canes Venatici","r":192.0,"d":43},{"n":"Canis Major","r":97.5,"d":-26},{"n":"Canis Minor","r":109.5,"d":5},{"n":"Capricornus","r":315.0,"d":-22},{"n":"Carina","r":144.0,"d":-66},{"n":"Cassiopeia","r":354.0,"d":55.5},{"n":"Centaurus","r":199.5,"d":-40},{"n":"Cepheus","r":337.5,"d":71},{"n":"Cetus","r":28.5,"d":-5},{"n":"Chamaeleon","r":189.0,"d":-81},{"n":"Circinus","r":217.5,"d":-67},{"n":"Columba","r":85.5,"d":-39},{"n":"Coma Berenices","r":193.5,"d":24},{"n":"Corona Austrina","r":282.0,"d":-40},{"n":"Corona Borealis","r":238.5,"d":32},{"n":"Corvus","r":186.0,"d":-19.5},{"n":"Crater","r":174.75,"d":-15},{"n":"Crux","r":193.5,"d":-62},{"n":"Cygnus","r":307.5,"d":50},{"n":"Delphinus","r":309.0,"d":6},{"n":"Dorado","r":76.5,"d":-64},{"n":"Draco","r":268.5,"d":64},{"n":"Equuleus","r":320.25,"d":11.5},{"n":"Eridanus","r":52.5,"d":-18},{"n":"Fornax","r":40.5,"d":-28},{"n":"Gemini","r":107.25,"d":23.5},{"n":"Grus","r":342.0,"d":-41.5},{"n":"Hercules","r":253.5,"d":35},{"n":"Horologium","r":51.0,"d":-52},{"n":"Hydra","r":150.0,"d":-22},{"n":"Hydrus","r":34.5,"d":-72},{"n":"Indus","r":318.0,"d":-55.5},{"n":"Lacerta","r":342.0,"d":47},{"n":"Leo","r":159.0,"d":15},{"n":"Leo Minor","r":157.5,"d":30},{"n":"Lepus","r":88.5,"d":-25},{"n":"Libra","r":231.0,"d":-26},{"n":"Lupus","r":228.75,"d":-35},{"n":"Lynx","r":121.5,"d":49},{"n":"Lyra","r":279.0,"d":30},{"n":"Mensa","r":82.5,"d":-80},{"n":"Microscopium","r":316.5,"d":-37},{"n":"Monoceros","r":114.75,"d":-6},{"n":"Musca","r":195.0,"d":-73},{"n":"Norma","r":243.0,"d":-52},{"n":"Octans","r":300.0,"d":-80},{"n":"Ophiuchus","r":258.0,"d":3},{"n":"Orion","r":84.0,"d":13},{"n":"Pavo","r":297.0,"d":-62},{"n":"Pegasus","r":334.5,"d":16},{"n":"Perseus","r":66.0,"d":45},{"n":"Phoenix","r":16.5,"d":-43},{"n":"Pictor","r":82.5,"d":-50},{"n":"Pisces","r":19.5,"d":15},{"n":"Piscis Austrinus","r":333.0,"d":-29},{"n":"Puppis","r":111.0,"d":-46},{"n":"Pyxis","r":132.0,"d":-24},{"n":"Reticulum","r":55.5,"d":-61},{"n":"Sagitta","r":291.0,"d":18},{"n":"Sagittarius","r":292.5,"d":-34},{"n":"Scorpius","r":249.0,"d":-38},{"n":"Sculptor","r":1.5,"d":-33},{"n":"Scutum","r":282.0,"d":-12.5},{"n":"Serpens Caput","r":232.5,"d":5},{"n":"Serpens Cauda","r":280.5,"d":3},{"n":"Sextans","r":157.5,"d":-7},{"n":"Taurus","r":54.0,"d":15},{"n":"Telescopium","r":277.5,"d":-54},{"n":"Triangulum","r":27.0,"d":34},{"n":"Triangulum Australe","r":240.0,"d":-67.5},{"n":"Tucana","r":348.0,"d":-64},{"n":"Ursa Major","r":165.0,"d":48},{"n":"Ursa Minor","r":226.5,"d":68},{"n":"Vela","r":143.25,"d":-46},{"n":"Virgo","r":199.5,"d":-4},{"n":"Volans","r":111.0,"d":-73},{"n":"Vulpecula","r":295.5,"d":21}]},"regions":[{"name":"Cygnus","ra":310.0,"dec":37.5,"w":15,"h":17,"file":"regions/cygnus.jpg","px":[1350,1530]},{"name":"Cepheus","ra":324.0,"dec":58.0,"w":10,"h":9,"file":"regions/cepheus.jpg","px":[900,810]},{"name":"Cassiopeia","ra":41.0,"dec":61.0,"w":10,"h":7,"file":"regions/cassiopeia.jpg","px":[900,630]},{"name":"Cassiopeia west","ra":5.0,"dec":58.5,"w":10,"h":7,"file":"regions/cassiopeia-west.jpg","px":[900,630]},{"name":"Cepheus / Bubble","ra":350.0,"dec":61.0,"w":6,"h":6,"file":"regions/cepheus-bubble.jpg","px":[540,540]},{"name":"California","ra":60.2,"dec":36.5,"w":7,"h":5,"file":"regions/california.jpg","px":[630,450]},{"name":"Auriga","ra":80.5,"dec":34.0,"w":8,"h":7,"file":"regions/auriga.jpg","px":[720,630]},{"name":"Taurus","ra":63.0,"dec":24.0,"w":8,"h":8,"file":"regions/taurus.jpg","px":[720,720]},{"name":"Orion","ra":84.5,"dec":1.0,"w":13,"h":20,"file":"regions/orion.jpg","px":[1040,1600]},{"name":"Monoceros","ra":100.5,"dec":0.0,"w":12,"h":22,"file":"regions/monoceros.jpg","px":[873,1600]},{"name":"Gemini","ra":94.3,"dec":22.5,"w":6,"h":6,"file":"regions/gemini.jpg","px":[540,540]},{"name":"Sagittarius","ra":273.0,"dec":-19.0,"w":9,"h":14,"file":"regions/sagittarius.jpg","px":[810,1260]},{"name":"Ophiuchus","ra":246.5,"dec":-24.0,"w":9,"h":9,"file":"regions/ophiuchus.jpg","px":[810,810]},{"name":"Scutum / Serpens","ra":277.0,"dec":-8.0,"w":7,"h":8,"file":"regions/scutum-serpens.jpg","px":[630,720]},{"name":"Carina","ra":161.0,"dec":-59.5,"w":9,"h":7,"file":"regions/carina.jpg","px":[810,630]},{"name":"Vela","ra":136.0,"dec":-45.0,"w":10,"h":10,"file":"regions/vela.jpg","px":[900,900]},{"name":"Large Magellanic Cloud","ra":80.9,"dec":-69.75,"w":12,"h":10,"file":"regions/large-magellanic-cloud.jpg","px":[1080,900]},{"name":"Small Magellanic Cloud","ra":13.2,"dec":-72.8,"w":6,"h":5,"file":"regions/small-magellanic-cloud.jpg","px":[540,450]}]}</script>
+<script type="importmap">{ "imports": { "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js" } }</script>
+<script type="module">
+import * as THREE from 'three';
+
+// ---------------------------------------------------------------- content
+// DSS2 colour cut-outs from CDS hips2fits, every one at 5 px/arcmin. Field = the image's true angular size.
+const OBJECTS = [
+  { file: 'ngc6960-6992-6995', name: 'Cygnus Loop (Veil Nebula)', des: 'NGC 6960 / 6992 / 6995', ra: 312.75, dec: 30.70, field: [215, 195], size: [180, 160] },
+  { file: 'ic1396',  name: 'Elephant Trunk region', des: 'IC 1396',  ra: 324.75,  dec: 57.50,   field: [205, 175], size: [170, 140] },
+  { file: 'ic1805',  name: 'Heart Nebula',          des: 'IC 1805',  ra: 38.20,   dec: 61.45,   field: [180, 180], size: [150, 150] },
+  { file: 'ic1848',  name: 'Soul Nebula',           des: 'IC 1848',  ra: 44.00,   dec: 60.42,   field: [180, 115], size: [150, 75] },
+  { file: 'm31',     name: 'Andromeda Galaxy',      des: 'M31',      ra: 10.6847, dec: 41.2689, field: [205, 240], size: [200, 70] },
+  { file: 'ngc7000', name: 'North America Nebula',  des: 'NGC 7000', ra: 314.85,  dec: 44.30,   field: [150, 170], size: [120, 100] },
+  { file: 'm45',     name: 'Pleiades',              des: 'M45',      ra: 56.75,   dec: 24.12,   field: [140, 140], size: [110, 110] },
+  { file: 'ngc2237-2244', name: 'Rosette Nebula',   des: 'NGC 2237 / 2244', ra: 97.98, dec: 4.95, field: [110, 110], size: [80, 80] },
+  { file: 'm42',     name: 'Orion Nebula',          des: 'M42',      ra: 83.82,   dec: -5.39,   field: [85, 85],   size: [60, 60] },
+  { file: 'm33',     name: 'Triangulum Galaxy',     des: 'M33',      ra: 23.4621, dec: 30.6599, field: [80, 80],   size: [60, 36] },
+  { file: 'm81',     name: "Bode's Galaxy",         des: 'M81',      ra: 148.8882, dec: 69.0653, field: [50, 50],  size: [27, 14] },
+  { file: 'm101',    name: 'Pinwheel Galaxy',       des: 'M101',     ra: 210.8024, dec: 54.3488, field: [45, 45],  size: [22, 21] },
+  { file: 'm51',     name: 'Whirlpool Galaxy',      des: 'M51',      ra: 202.4696, dec: 47.1952, field: [35, 35],  size: [11, 7] },
+];
+// Data block: object library (OpenNGC via ScopeControl, CC-BY-SA-4.0), named stars and constellation lines
+// (d3-celestial, BSD). Inlined by tools/inline_data.py so the page needs no runtime fetches.
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const STARS = DATA.stars.map(st => [st.n, st.r, st.d, st.m]);
+const PLANETS = ['Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn'];
+const R = 50;                                   // sky radius, metres (everything sits "at infinity")
+const DEG = Math.PI / 180, ARCMIN = DEG / 60;
+const chord = a => 2 * R * Math.tan(a / 2);     // metres spanned by an angle at radius R
+
+// ---------------------------------------------------------------- state
+const store = (k, v) => { try { if (v !== undefined) localStorage.setItem(k, JSON.stringify(v)); return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+let lat = store('lat') ?? 51.5, lon = store('lon') ?? -0.12, yaw = store('yaw') ?? 0, toff = 0;
+let aligned = store('aligned');                 // { on: 'Moon', at: epoch ms } or null
+const $ = id => document.getElementById(id);
+$('lat').value = lat; $('lon').value = lon;
+
+// ---------------------------------------------------------------- scene
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local');
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 400);
+camera.position.set(0, 1.6, 0);
+const rig = new THREE.Group(); rig.add(camera); scene.add(rig);
+const eyeOf = () => (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera).getWorldPosition(new THREE.Vector3());
+const fwdOf = () => { const f = new THREE.Vector3(); (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera).getWorldDirection(f); return f; };
+
+// Sky group: its local frame IS the J2000 equatorial frame (x -> RA 0, z -> north celestial pole).
+const sky = new THREE.Group(); sky.matrixAutoUpdate = false; scene.add(sky);
+const loader = new THREE.TextureLoader();
+
+// All-sky base (Mellinger, equirectangular, RA increasing to the LEFT as hips2fits renders it).
+const skyTex = loader.load('assets/sky_mellinger.jpg', t => { t.colorSpace = THREE.SRGBColorSpace; });
+skyTex.generateMipmaps = false; skyTex.minFilter = THREE.LinearFilter;   // no mip seam at the RA wrap
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: { map: { value: skyTex }, gain: { value: 1.0 } },
+  side: THREE.BackSide, depthWrite: false, transparent: true, blending: THREE.AdditiveBlending,
+  vertexShader: `varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `uniform sampler2D map; uniform float gain; varying vec3 vDir;
+    void main(){ vec3 d = normalize(vDir); float ra = atan(d.y, d.x); float dec = asin(clamp(d.z,-1.0,1.0));
+      vec2 uv = vec2(fract(0.5 - ra / 6.28318530718), 0.5 + dec / 3.14159265359);
+      vec4 c = texture2D(map, uv); gl_FragColor = vec4(c.rgb * gain, 1.0); }`,
+});
+sky.add(new THREE.Mesh(new THREE.SphereGeometry(R * 1.5, 48, 32), skyMat));
+
+const dirOf = (raDeg, decDeg) => new THREE.Vector3(Math.cos(decDeg * DEG) * Math.cos(raDeg * DEG), Math.cos(decDeg * DEG) * Math.sin(raDeg * DEG), Math.sin(decDeg * DEG));
+function frameAt(d) {                            // tangent frame: north up, east left as seen from inside
+  const z = new THREE.Vector3(0, 0, 1);
+  const north = z.clone().sub(d.clone().multiplyScalar(z.dot(d))).normalize();
+  const right = new THREE.Vector3().crossVectors(d, north);
+  return new THREE.Matrix4().makeBasis(right, north, d.clone().negate());
+}
+function placeOnSky(obj, raDeg, decDeg, dist = R) {
+  const d = dirOf(raDeg, decDeg);
+  obj.position.copy(d).multiplyScalar(dist);
+  obj.quaternion.setFromRotationMatrix(frameAt(d));
+}
+
+// Labels: canvas planes in a horizon-aligned group so text stays level. Placed each second from an anchor.
+function label(lines, color = '#e8ecf4', heightDeg = 0.9, px = 56) {
+  const c = document.createElement('canvas'); c.width = 1024; c.height = Math.round(px * 1.7) * lines.length + 16;
+  const g = c.getContext('2d'); g.textAlign = 'center';
+  lines.forEach((t, i) => { g.font = (i ? `400 ${Math.round(px * 0.72)}px` : `600 ${px}px`) + ' "IBM Plex Sans", "Segoe UI", sans-serif';
+    g.fillStyle = i ? '#b9c1d0' : color; g.fillText(t, 512, px * 1.15 + i * px * 1.6); });
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+  const h = chord(heightDeg * DEG * lines.length); m.scale.set(h * c.width / c.height, h, 1);
+  return m;
+}
+const labels = new THREE.Group(); scene.add(labels);
+const LABELS = [];
+function addLabel(anchor, lines, dropDeg, color, heightDeg, px, kind, mag = 0, aw = 0.3) {
+  const m = label(lines, color, heightDeg, px); labels.add(m); m.material.opacity = 0; m.visible = false;
+  LABELS.push({ mesh: m, anchor, dropDeg, kind, mag, aw, target: 0 }); return m;
+}
+function placeLabels() {
+  sky.updateMatrixWorld(true);
+  const eye = eyeOf(), fwd = fwdOf(), now = performance.now();
+  const up = new THREE.Vector3(0, 1, 0);
+  // Budget tied to the field of view, as planetarium apps do: wide views name only the famous things,
+  // narrow views open up. The headset is a fixed ~90 degree view, so there the reticle does the work.
+  const fov = renderer.xr.isPresenting ? 90 : camera.fov;
+  const tier = fov > 55 ? { starMag: 1.2, coneMag: 2.6, libN: 4 } : fov > 30 ? { starMag: 2.0, coneMag: 4.0, libN: 7 } : { starMag: 3.0, coneMag: 6.0, libN: 12 };
+  const cone = Math.cos(10 * DEG), gaze = Math.cos(1.5 * DEG);
+  const ang = m => 2 * Math.atan(m / 2 / R) / DEG;
+  const near = [];
+  const nearCone = Math.cos(45 * DEG);
+  for (const L of LABELS) {
+    L.d = L.anchor.getWorldPosition(new THREE.Vector3()).sub(eye).normalize();
+    L.dot = L.d.dot(fwd);
+    if ((L.kind === 'lib' || L.kind === 'object') && L.dot > nearCone) loadTex(L.anchor.userData.obj);
+    L.hw = ang(L.mesh.scale.x) * 0.35; L.hh = ang(L.mesh.scale.y) * 0.5;      // text box, degrees (text fills ~70% of the canvas)
+    L.gazed = L.dot > gaze && L.kind !== 'con';
+    if (L.kind === 'lib' && L.dot > cone && L.anchor.visible) near.push(L);
+  }
+  for (const r of REGIONS) {                                                   // survey plates load as the view approaches them
+    if (r.loaded) continue;
+    const d = r.quad.getWorldPosition(new THREE.Vector3()).sub(eye).normalize();
+    if (d.dot(fwd) > Math.cos(60 * DEG)) loadRegion(r);
+  }
+  near.sort((a, b) => b.anchor.userData.obj.size[0] - a.anchor.userData.obj.size[0]);
+  const allow = new Set(near.slice(0, tier.libN));
+  const wants = L => L.gazed || (L.kind === 'star' ? $('starNames').checked && (L.mag <= tier.starMag || (L.dot > cone && L.mag <= tier.coneMag))
+      : L.kind === 'lib' ? allow.has(L) : L.kind === 'con' ? $('cons').checked : true);
+  // priority: what the reticle is on, then recently shown labels (stability), then featured/bodies, library by size, stars by brightness
+  const rank = L => (L.gazed ? -1 : 0) + (L.shownAt && now - L.shownAt < 1500 ? 0 : 1) * (L.kind === 'object' || L.kind === 'body' || L.kind === 'planet' ? 0 : L.kind === 'lib' ? 1 : L.kind === 'star' ? 2 : 3);
+  const order = LABELS.filter(L => L.anchor.visible && wants(L)).sort((a, b) => rank(a) - rank(b) || (a.kind === 'star' ? a.mag - b.mag : 0));
+  // candidate anchors: below the object (default), to its right, above — the first that clears the accepted boxes wins
+  const place = (L, where) => {
+    const axis = new THREE.Vector3().crossVectors(up, L.d).normalize(); if (axis.lengthSq() < 1e-6) axis.set(1, 0, 0);
+    const alt = Math.asin(L.d.y) / DEG;
+    if (where === 'below') return L.d.clone().applyAxisAngle(axis, L.dropDeg * DEG);
+    if (where === 'above') return L.d.clone().applyAxisAngle(axis, -L.dropDeg * DEG);
+    return L.d.clone().applyAxisAngle(up, -(L.hw + L.aw + 0.25) / Math.max(0.2, Math.cos(alt * DEG)) * DEG);   // right
+  };
+  const box = (L, pv) => ({ alt: Math.asin(pv.y) / DEG, az: Math.atan2(pv.x, -pv.z) / DEG, hw: L.hw, hh: L.hh });
+  const collide = (A, B) => {
+    const dAlt = Math.abs(A.alt - B.alt); let dAz = Math.abs(A.az - B.az); if (dAz > 180) dAz = 360 - dAz;
+    dAz *= Math.cos((A.alt + B.alt) / 2 * DEG);
+    return dAz < A.hw + B.hw + 0.2 && dAlt < A.hh + B.hh + 0.15;
+  };
+  const accepted = [];
+  for (const L of LABELS) L.target = 0;
+  for (const L of order) {
+    if (L.kind === 'con') { L.p = place(L, 'below'); L.target = 1; continue; }
+    for (const where of (L.kind === 'star' ? ['below', 'right', 'above'] : ['below', 'above', 'right'])) {
+      const pv = place(L, where), b = box(L, pv);
+      if (accepted.some(M => collide(M, b))) continue;
+      accepted.push(b); L.p = pv; L.target = 1; L.shownAt = now; break;
+    }
+  }
+  for (const L of LABELS) if (L.p && (L.target || L.mesh.visible)) L.mesh.position.copy(eye).addScaledVector(L.p, R);
+}
+
+// Every object is a true-scale quad: the quad's angular size is exactly the cut-out's field.
+// Featured objects (the chart's 13) carry curated fields; the library comes from ScopeControl's catalogue.
+for (const o of OBJECTS) { o.featured = true; o.path = `assets/objects/${o.file}.jpg`; o.dims = `${o.size[0]}′ × ${o.size[1]}′`; }
+for (const L of DATA.library) {
+  OBJECTS.push({ featured: false, path: 'assets/' + L.file, name: L.name || L.id, des: L.id, ra: L.ra, dec: L.dec,
+                 field: [L.field, L.field], size: [L.size, L.size], dims: `${L.size}′`, mag: L.mag, type: L.type });
+}
+const TYPE_LABEL = { G: 'Galaxy', GPair: 'Galaxy pair', GTrpl: 'Galaxy triplet', GGroup: 'Galaxy group', OCl: 'Open cluster', GCl: 'Globular cluster',
+  '*Ass': 'Star association', PN: 'Planetary nebula', Neb: 'Nebula', HII: 'HII region', RfN: 'Reflection nebula', EmN: 'Emission nebula', SNR: 'Supernova remnant', 'Cl+N': 'Cluster + nebula' };
+// Survey imagery material: subtracts the plate's own sky level (so a cut-out does not sit on the base sky as
+// a lighter box) and feathers the edges over the outer 14% of the field, then adds the result to the sky.
+function surveyMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: { map: { value: null }, black: { value: new THREE.Vector3(0, 0, 0) }, gain: { value: 1.0 }, feather: { value: 0.14 } },
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `uniform sampler2D map; uniform vec3 black; uniform float gain; uniform float feather; varying vec2 vUv;
+      void main(){ vec4 c = texture2D(map, vUv);
+        float a = smoothstep(0.0, feather, vUv.x) * smoothstep(0.0, feather, 1.0 - vUv.x) * smoothstep(0.0, feather, vUv.y) * smoothstep(0.0, feather, 1.0 - vUv.y);
+        vec3 col = pow(max(c.rgb - black, 0.0), vec3(0.85)) * gain * a;    // mild stretch lifts faint nebulosity
+        gl_FragColor = vec4(col, 1.0); }`,
+  });
+}
+function skyLevel(img) {                         // 25th percentile of the border pixels, per channel
+  const c = document.createElement('canvas'); const n = 64; c.width = c.height = n; const g = c.getContext('2d');
+  g.drawImage(img, 0, 0, n, n); const d = g.getImageData(0, 0, n, n).data; const ch = [[], [], []];
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (x < 4 || y < 4 || x >= n - 4 || y >= n - 4) { const i = (y * n + x) * 4; ch[0].push(d[i]); ch[1].push(d[i + 1]); ch[2].push(d[i + 2]); }
+  return ch.map(v => { v.sort((a, b) => a - b); return 0.85 * v[Math.floor(v.length * 0.12)] / 255; });   // just under the sky level
+}
+function loadTex(o) {
+  if (o.loaded) return; o.loaded = true;
+  loader.load(o.path, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter;
+    const b = skyLevel(t.image); o.quad.material.uniforms.black.value.set(b[0], b[1], b[2]); o.quad.material.uniforms.map.value = t;
+    o.quad.visible = !o.covered; });
+}
+for (const o of OBJECTS) {
+  const w = chord(o.field[0] * ARCMIN), h = chord(o.field[1] * ARCMIN);
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(w, h), surveyMaterial());
+  quad.visible = false;                                                // shown once its texture arrives
+  placeOnSky(quad, o.ra, o.dec); sky.add(quad); o.quad = quad; quad.userData.obj = o;
+  const edge = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-w / 2, -h / 2, 0), new THREE.Vector3(w / 2, -h / 2, 0), new THREE.Vector3(w / 2, h / 2, 0), new THREE.Vector3(-w / 2, h / 2, 0)]),
+    new THREE.LineBasicMaterial({ color: o.featured ? 0xffb05a : 0x7f8aa8, transparent: true, opacity: o.featured ? 0.35 : 0.22, depthWrite: false }));
+  edge.name = 'outline'; edge.visible = false; sky.add(edge); edge.position.copy(quad.position); edge.quaternion.copy(quad.quaternion); o.edge = edge;
+  o.moons = (o.size[0] / 30).toFixed(o.size[0] < 30 ? 2 : 1);
+  const kind = o.type ? (TYPE_LABEL[o.type] || o.type) : '';
+  o.label = addLabel(quad, [o.name, `${o.des}  ·  ${kind ? kind + '  ·  ' : ''}${o.dims}`], o.field[1] / 120 + 1.0, '#e8ecf4', 0.9, 56, o.featured ? 'object' : 'lib', 0, o.field[0] / 120);
+}
+const FEATURED = OBJECTS.filter(o => o.featured);
+
+// Regional survey plates (DSS2 colour, 1.5 px/arcmin): continuous nebulosity across the rich areas, drawn under
+// the cut-outs; an object whose centre falls inside a plate hides its own cut-out so nothing is added twice.
+const REGIONS = DATA.regions.map(r => {
+  const w = chord(r.w * DEG), h = chord(r.h * DEG);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), surveyMaterial()); m.material.uniforms.feather.value = 0.08; m.material.uniforms.gain.value = 2.2;
+  placeOnSky(m, r.ra, r.dec, R * 1.01); m.visible = false; m.renderOrder = -1; sky.add(m);
+  return Object.assign({ quad: m, loaded: false, path: 'assets/' + r.file }, r);
+});
+for (const o of OBJECTS) {
+  o.covered = REGIONS.some(r => { let dra = Math.abs(o.ra - r.ra); if (dra > 180) dra = 360 - dra;
+    return dra * Math.cos(r.dec * DEG) < r.w / 2 - 0.5 && Math.abs(o.dec - r.dec) < r.h / 2 - 0.5; });
+}
+function loadRegion(r) {
+  if (r.loaded) return; r.loaded = true;
+  loader.load(r.path, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter;
+    const b = skyLevel(t.image); r.quad.material.uniforms.black.value.set(b[0], b[1], b[2]); r.quad.material.uniforms.map.value = t; r.quad.visible = $('regions').checked; });
+}
+FEATURED.forEach(loadTex);
+
+// Constellation lines (d3-celestial), drawn on the sky sphere.
+const constellations = new THREE.Group(); sky.add(constellations);
+{
+  const pts = [];
+  for (const line of DATA.constellations.lines) for (let i = 1; i < line.length; i++) {
+    const a = dirOf(line[i - 1][0], line[i - 1][1]), b = dirOf(line[i][0], line[i][1]);
+    const n = 6; let prev = a;                                       // subdivide so long lines follow the sphere
+    for (let k = 1; k <= n; k++) { const q = a.clone().lerp(b, k / n).normalize(); pts.push(prev.clone().multiplyScalar(R * 0.98), q.clone().multiplyScalar(R * 0.98)); prev = q; }
+  }
+  constellations.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x4a6a9a, transparent: true, opacity: 0.45, depthWrite: false })));
+  for (const c of DATA.constellations.names) { const s = new THREE.Object3D(); s.position.copy(dirOf(c.r, c.d)).multiplyScalar(R); constellations.add(s); addLabel(s, [c.n.toUpperCase()], 0, '#5f7aa6', 0.8, 48, 'con'); }
+}
+
+// Bright stars: round points sized by magnitude, plus small names.
+{
+  const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
+  const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32); grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.35, 'rgba(255,250,240,0.9)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+  const spr = new THREE.CanvasTexture(c);
+  for (const [name, ra, dec, mag] of STARS) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: spr, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.9 }));
+    const sz = chord(Math.max(0.12, 0.55 - 0.12 * mag) * DEG);      // brighter = bigger
+    s.scale.set(sz, sz, 1); s.position.copy(dirOf(ra, dec)).multiplyScalar(R); sky.add(s);
+    addLabel(s, [name], 1.1, '#b9c1d0', 1.0, 56, 'star', mag);
+  }
+}
+
+// Moon, Sun and planets: rings at the topocentric J2000 position, refreshed each second.
+function ring(color, text, arcmin, dashed = true, labelDeg = 0.55) {
+  const rr = R * Math.tan(arcmin / 2 * ARCMIN);
+  const pts = []; for (let i = 0; i <= 96; i++) { const a = i / 96 * Math.PI * 2; pts.push(new THREE.Vector3(rr * Math.cos(a), rr * Math.sin(a), 0)); }
+  const mat = dashed ? new THREE.LineDashedMaterial({ color, dashSize: 0.03, gapSize: 0.02, depthWrite: false }) : new THREE.LineBasicMaterial({ color, depthWrite: false });
+  const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat); l.computeLineDistances();
+  const g = new THREE.Group(); g.add(l); sky.add(g);
+  addLabel(g, [text], arcmin / 120 + 0.5, color, labelDeg, 48, text === 'Moon' || text === 'Sun' ? 'body' : 'planet');
+  return g;
+}
+const BODY = { Moon: ring('#ffe6be', 'Moon', 30), Sun: ring('#ffb05a', 'Sun', 30) };
+{ // Polaris: the one alignment reference, ringed and named at all times
+  const g = ring('#ffb05a', 'Polaris  ·  align here', 90, true, 0.9);
+  const st = STARS.find(x => x[0] === 'Polaris'); placeOnSky(g, st[1], st[2]);
+}
+for (const p of PLANETS) BODY[p] = ring('#9ad0ff', p, 14, false);
+const bodyHor = {};
+
+// Horizon line and compass points, gravity-aligned, following the eye.
+const horizon = new THREE.Group(); scene.add(horizon);
+{
+  const pts = []; for (let i = 0; i <= 180; i++) { const a = i / 180 * Math.PI * 2; pts.push(new THREE.Vector3(R * Math.sin(a), 0, -R * Math.cos(a))); }
+  horizon.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x3a4461, transparent: true, opacity: 0.6 })));
+  [['N', 0], ['E', 90], ['S', 180], ['W', 270]].forEach(([t, az]) => { const l = label([t], '#8e97a8', 1.2); l.position.set(R * Math.sin(az * DEG), 0.8, -R * Math.cos(az * DEG)); l.lookAt(0, 0, 0); horizon.add(l); });
+}
+const reticle = new THREE.Mesh(new THREE.RingGeometry(0.012, 0.016, 32), new THREE.MeshBasicMaterial({ color: 0xffb05a, transparent: true, opacity: 0.8, depthTest: false }));
+reticle.position.z = -1.5; camera.add(reticle);
+
+// ---------------------------------------------------------------- astronomy
+const A = window.Astronomy;
+const observer = () => new A.Observer(lat, lon, 50);
+const nowT = () => new Date(Date.now() + toff * 3600e3);
+const horToWorld = v => new THREE.Vector3(-v.y, v.z, -v.x);      // astronomy-engine HOR: x north, y west, z zenith
+function updateSky() {
+  const t = A.MakeTime(nowT()), obs = observer();
+  const rot = A.Rotation_EQJ_HOR(t, obs);
+  const col = v => horToWorld(A.RotateVector(rot, new A.Vector(v[0], v[1], v[2], t)));
+  sky.matrix.makeRotationY(yaw * DEG).multiply(new THREE.Matrix4().makeBasis(col([1, 0, 0]), col([0, 1, 0]), col([0, 0, 1])));
+  sky.matrix.setPosition(eyeOf()); sky.updateMatrixWorld(true);
+  for (const name of Object.keys(BODY)) {
+    const eq = A.Equator(A.Body[name], t, obs, false, true);          // J2000 topocentric
+    placeOnSky(BODY[name], eq.ra * 15, eq.dec);
+    const eqd = A.Equator(A.Body[name], t, obs, true, true);
+    bodyHor[name] = A.Horizon(t, obs, eqd.ra, eqd.dec, 'normal');
+  }
+  BODY.Sun.visible = bodyHor.Sun.altitude > -2;
+  for (const p of PLANETS) BODY[p].visible = $('planets').checked && bodyHor[p].altitude > -2;
+  placeLabels();
+  $('clock').textContent = `${nowT().toUTCString().slice(5, 25)} UTC`;
+  updateStrip(); updateAlignState();
+}
+function altOf(obj) { const p = obj.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize(); return Math.asin(p.y) / DEG; }
+
+// ---------------------------------------------------------------- alignment
+const targetObj = name => BODY[name] || sky.children.find(c => c.isSprite && STARS[c.userData.i]?.[0] === name) || null;
+// star sprites are found by index; tag them
+{ let i = 0; for (const c of sky.children) if (c.isSprite) c.userData.i = i++; }
+function alignOn(name) {
+  const target = targetObj(name); if (!target) return;
+  const fwd = fwdOf(); const azCam = Math.atan2(fwd.x, -fwd.z) / DEG;
+  const p = target.getWorldPosition(new THREE.Vector3()).sub(eyeOf());
+  const azT = Math.atan2(p.x, -p.z) / DEG;
+  const delta = ((azCam - azT + 540) % 360) - 180;
+  yaw = ((yaw + delta + 540) % 360) - 180;
+  aligned = { on: name, at: Date.now(), delta }; hudForce = false;
+  store('yaw', yaw); store('aligned', aligned); updateSky();
+}
+let hudForce = false;                                             // tap the HUD status to bring Align back
+$('hudState').onclick = () => { hudForce = !hudForce; updateAlignState(); };
+function updateAlignState() {
+  const el = $('align-state'), tx = $('alignText');
+  $('hudAlign').hidden = false;
+  if (!aligned) { el.classList.remove('ok'); tx.textContent = phoneMode ? 'Compass only' : 'Not aligned'; $('hudState').textContent = phoneMode ? 'Compass only — put Polaris in the reticle and tap Align' : 'Not aligned — look at Polaris and pull the trigger'; return; }
+  const min = Math.round((Date.now() - aligned.at) / 60000);
+  const stale = min >= 10;
+  el.classList.toggle('ok', !stale);
+  $('hudAlign').hidden = !stale && !hudForce;                     // aligned: the button steps aside until it goes stale
+  const s = `Aligned on ${aligned.on} · ${min < 1 ? `just now (turned ${aligned.delta >= 0 ? '+' : ''}${(aligned.delta || 0).toFixed(1)}°)` : min + ' min ago'}${stale ? ' · re-align' : ''}`;
+  tx.textContent = s; $('hudState').textContent = s;
+}
+const POLARIS = 'Polaris';
+$('alignBtn').onclick = () => alignOn(POLARIS);
+$('hudAlign').onclick = () => alignOn(POLARIS);
+$('resetYaw').onclick = () => { yaw = 0; aligned = null; store('yaw', 0); store('aligned', null); updateSky(); };
+
+// ---------------------------------------------------------------- pull an object closer
+const held = new THREE.Group(); camera.add(held); held.visible = false;
+let heldObj = null;
+const moonDisc = new THREE.Mesh(new THREE.CircleGeometry(1, 64), new THREE.MeshBasicMaterial({ color: 0xd9d4c7 }));
+function hold(o) {
+  loadTex(o); held.clear(); heldObj = o;
+  const D = 1.2, span = 32 * DEG;                                    // the cut-out fills 32 degrees at 1.2 m
+  const mag = span / (o.field[0] * ARCMIN);                          // magnification relative to the real sky
+  const w = 2 * D * Math.tan(span / 2), h = w * o.field[1] / o.field[0];
+  const q = new THREE.Mesh(new THREE.PlaneGeometry(w, h), o.quad.material); q.position.set(0, 0.05, -D); held.add(q);
+  const md = D * Math.tan(30 * ARCMIN * mag / 2); moonDisc.scale.set(md, md, 1); moonDisc.position.set(w / 2 + md + 0.06, -h / 2 + md, -D); held.add(moonDisc);
+  const card = label([o.name, `${o.des}  ·  ${o.dims}`, `magnified ×${mag.toFixed(0)} — Moon shown at the same magnification`], '#e8ecf4', 0.9, 56);
+  card.scale.multiplyScalar(0.065); card.position.set(0, -h / 2 - 0.16, -D); held.add(card);
+  const ml = label(['Moon'], '#ffe6be', 0.6, 48); ml.scale.multiplyScalar(0.045); ml.position.set(moonDisc.position.x, moonDisc.position.y - md - 0.05, -D); held.add(ml);
+  held.visible = true; o.quad.visible = false; labels.visible = false; guide.visible = false; hiRing.visible = false;
+  document.querySelectorAll('#strip button').forEach(b => b.classList.toggle('active', b.dataset.des === o.des));
+}
+function release() { if (!heldObj) return; heldObj.quad.visible = true; labels.visible = true; heldObj = null; held.visible = false; held.clear(); document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active')); }
+const ray = new THREE.Raycaster();
+function objectInView() {
+  sky.updateMatrixWorld(true);
+  ray.set(eyeOf(), fwdOf());
+  const hit = ray.intersectObjects(OBJECTS.map(o => o.quad), false)[0];
+  return hit ? hit.object.userData.obj : null;
+}
+function select() {                              // trigger / pinch / click: grab what you're looking at, else align
+  if (heldObj) return release();
+  const o = objectInView();
+  if (o) hold(o); else if (renderer.xr.isPresenting) alignOn(POLARIS);
+}
+for (let i = 0; i < 2; i++) { const c = renderer.xr.getController(i); c.addEventListener('selectstart', select); scene.add(c); }
+addEventListener('keydown', e => { if (e.key === '0') setFov(70); if (e.key.toLowerCase() === 'a') alignOn(POLARIS); if (e.key === 'Escape') { if (heldObj) release(); else if (target) setTarget(target); } if (e.key.toLowerCase() === 'l' && target) lookAt(target.quad); });
+
+const hud = $('hud');
+
+// ---------------------------------------------------------------- target guidance
+// Pick a target (strip, search) and a chevron at the edge of the view points the way to turn, with the angle left.
+// Once the target is inside the view the chevron gives way to a pulsing ring around it; within 2 degrees you are on it.
+let target = null;
+const guide = new THREE.Group(); camera.add(guide); guide.visible = false;
+const chevron = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+  g.fillStyle = '#ffb05a'; g.beginPath(); g.moveTo(16, 16); g.lineTo(112, 64); g.lineTo(16, 112); g.lineTo(44, 64); g.closePath(); g.fill();
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.Mesh(new THREE.PlaneGeometry(0.11, 0.11), new THREE.MeshBasicMaterial({ map: t, transparent: true, depthTest: false }));
+})();
+guide.add(chevron);
+let guideText = null, guideTextKey = '';
+const hiRing = (() => {
+  const pts = []; for (let i = 0; i <= 96; i++) { const a = i / 96 * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a), Math.sin(a), 0)); }
+  const l = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xffb05a, transparent: true, opacity: 0.9, depthWrite: false }));
+  l.visible = false; sky.add(l); return l;
+})();
+function setTarget(o) {
+  target = o === target ? null : o;
+  document.querySelectorAll('#strip button').forEach(b => b.classList.toggle('active', !!target && b.dataset.des === target.des));
+  if (target) {
+    const d = dirOf(target.ra, target.dec);
+    hiRing.position.copy(d).multiplyScalar(R * 0.995); hiRing.quaternion.setFromRotationMatrix(frameAt(d));
+    const rr = R * Math.tan(Math.hypot(target.field[0], target.field[1]) / 2 * ARCMIN) * 1.15;
+    hiRing.scale.set(rr, rr, 1);
+  }
+  hiRing.visible = false; guide.visible = false; guideTextKey = '';
+}
+function updateGuide(tms) {
+  if (!target) return;
+  const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const q = cam.getWorldQuaternion(new THREE.Quaternion()).invert();
+  const v = target.quad.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize().applyQuaternion(q);   // target in view space
+  const sepDeg = Math.acos(Math.max(-1, Math.min(1, -v.z))) / DEG;
+  const fovV = renderer.xr.isPresenting ? 85 : camera.fov, fovH = 2 * Math.atan(Math.tan(fovV / 2 * DEG) * (renderer.xr.isPresenting ? 1.1 : camera.aspect)) / DEG;
+  const inView = sepDeg < 0.42 * Math.min(fovV, fovH);
+  guide.scale.setScalar(renderer.xr.isPresenting ? 1 : Math.max(0.35, fovV / 70));
+  hiRing.visible = inView; hiRing.material.opacity = 0.55 + 0.4 * Math.sin(tms / 180);
+  guide.visible = !inView || sepDeg > 2;
+  const D = 1.5, edge = D * Math.tan(0.36 * Math.min(fovV, fovH) * DEG);
+  const dir = new THREE.Vector2(v.x, v.y); if (dir.lengthSq() < 1e-8) dir.set(1, 0); dir.normalize();
+  const rad = inView ? Math.min(edge, D * Math.tan(sepDeg * DEG)) : edge;
+  chevron.position.set(dir.x * rad, dir.y * rad, -D); chevron.rotation.z = Math.atan2(dir.y, dir.x);
+  chevron.visible = !inView;
+  const key = `${target.des}|${Math.round(sepDeg)}|${inView}`;
+  if (key !== guideTextKey) {
+    guideTextKey = key;
+    if (guideText) { guide.remove(guideText); guideText.material.map.dispose(); }
+    const turn = sepDeg < 2 ? 'on target — pull the trigger to bring it closer' : inView ? `${sepDeg.toFixed(0)}° away` : `turn ${Math.abs(dir.x) > Math.abs(dir.y) ? (dir.x > 0 ? 'right' : 'left') : (dir.y > 0 ? 'up' : 'down')}  ·  ${sepDeg.toFixed(0)}°`;
+    guideText = label([target.name, turn], '#ffb05a', 0.9, 56); guideText.scale.multiplyScalar(0.05);
+    guide.add(guideText);
+  }
+  // text sits inside the chevron (towards the centre) when pointing, or just under the centre when the target is in view
+  guideText.position.set(inView ? 0 : dir.x * (rad - 0.22), inView ? -edge * 0.85 : dir.y * (rad - 0.22) - 0.1, -D);
+  if (!aligned && $('hudState')) $('hudState').textContent = 'Align on Polaris first for accurate guidance';
+}
+
+// ---------------------------------------------------------------- object strip (desktop)
+const BTN = new Map();
+for (const o of OBJECTS) {
+  const b = document.createElement('button'); b.dataset.des = o.des;
+  b.innerHTML = `<b>${o.name}</b><small>${o.name === o.des ? (TYPE_LABEL[o.type] || '') : o.des}${o.type ? ' · ' + (TYPE_LABEL[o.type] || o.type) : ''}</small>`;
+  b.onclick = () => { release(); setTarget(o); };
+  b.ondblclick = () => { lookAt(o.quad); };
+  BTN.set(o, b); $('strip').append(b);
+}
+function updateStrip() {
+  const q = $('search').value.trim().toLowerCase().replace(/\s+/g, ''), up = $('upOnly').checked; let n = 0;
+  for (const o of OBJECTS) {
+    const b = BTN.get(o), alt = altOf(o.quad);
+    const hit = !q || (o.name + o.des).toLowerCase().replace(/\s+/g, '').includes(q);
+    b.hidden = !(hit && (!up || alt > 0)); if (!b.hidden) n++;
+    b.classList.toggle('below', alt < 0); b.title = `${TYPE_LABEL[o.type] || ''} altitude ${alt.toFixed(0)}°`;
+  }
+  $('count').textContent = `${n} of ${OBJECTS.length}`;
+}
+$('search').oninput = updateStrip; $('upOnly').onchange = updateStrip;
+
+// ---------------------------------------------------------------- inputs
+$('lat').onchange = e => { lat = +e.target.value; store('lat', lat); updateSky(); };
+$('lon').onchange = e => { lon = +e.target.value; store('lon', lon); updateSky(); };
+$('geo').onclick = () => navigator.geolocation?.getCurrentPosition(p => { lat = +p.coords.latitude.toFixed(3); lon = +p.coords.longitude.toFixed(3); $('lat').value = lat; $('lon').value = lon; store('lat', lat); store('lon', lon); updateSky(); }, () => { $('geo').textContent = 'No fix'; });
+$('toff').oninput = e => { toff = +e.target.value; $('toffv').textContent = (toff >= 0 ? '+' : '') + toff.toFixed(1) + ' h'; updateSky(); };
+$('now').onclick = () => { toff = 0; $('toff').value = 0; $('toffv').textContent = '+0.0 h'; updateSky(); };
+$('gain').oninput = e => { const g = +e.target.value; skyMat.uniforms.gain.value = g; for (const o of OBJECTS) o.quad.material.uniforms.gain.value = g; for (const r of REGIONS) r.quad.material.uniforms.gain.value = 2.2 * g; };
+$('outlines').onchange = e => OBJECTS.forEach(o => { o.edge.visible = e.target.checked; });
+$('regions').onchange = e => { REGIONS.forEach(r => { r.quad.visible = e.target.checked && r.loaded; }); OBJECTS.forEach(o => { if (o.loaded && o.quad.material.uniforms.map.value) o.quad.visible = !(e.target.checked && o.covered); }); };
+$('starNames').onchange = placeLabels; $('planets').onchange = updateSky; $('cons').onchange = () => { constellations.children[0].visible = $('cons').checked; placeLabels(); };
+$('settings').onclick = () => { const d = $('drawer'); d.hidden = !d.hidden; $('settings').setAttribute('aria-expanded', String(!d.hidden)); };
+
+// desktop look-around: drag to rotate, wheel to zoom, click to grab
+const setFov = f => { camera.fov = Math.max(5, Math.min(100, f)); camera.updateProjectionMatrix(); reticle.scale.setScalar(camera.fov / 70); };
+let drag = null, yawCam = 0, pitchCam = 20 * DEG;
+const setCam = () => { camera.rotation.set(0, 0, 0, 'YXZ'); camera.rotation.y = -yawCam; camera.rotation.x = pitchCam; };
+function lookAt(obj) {
+  const p = obj.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize();
+  yawCam = Math.atan2(p.x, -p.z); pitchCam = Math.asin(p.y); setCam();
+}
+$('lookBtn').onclick = () => lookAt(targetObj(POLARIS));
+renderer.domElement.addEventListener('pointerdown', e => { drag = [e.clientX, e.clientY, yawCam, pitchCam, false]; });
+addEventListener('pointerup', e => { if (drag && !drag[4] && !renderer.xr.isPresenting) select(); drag = null; });
+addEventListener('pointermove', e => { if (!drag || renderer.xr.isPresenting || phoneMode) return;
+  if (Math.hypot(e.clientX - drag[0], e.clientY - drag[1]) > 4) drag[4] = true;
+  yawCam = drag[2] + (e.clientX - drag[0]) * 0.0025 * camera.fov / 70; pitchCam = Math.max(-1.5, Math.min(1.5, drag[3] + (e.clientY - drag[1]) * 0.0025 * camera.fov / 70)); setCam(); });
+addEventListener('wheel', e => setFov(camera.fov + e.deltaY * 0.03), { passive: true });
+setCam();
+const qs = new URLSearchParams(location.search);
+if (qs.get('fov')) setFov(+qs.get('fov'));
+if (qs.get('settings')) { $('drawer').hidden = false; $('settings').setAttribute('aria-expanded', 'true'); }
+if (qs.get('look')) setTimeout(() => { const v = qs.get('look'); const o = targetObj(v) || OBJECTS.find(x => x.des === v)?.quad; if (o) lookAt(o); }, 300);
+if (qs.get('target')) setTimeout(() => { const o = OBJECTS.find(x => x.des === qs.get('target')); if (o) setTarget(o); }, 300);
+if (qs.get('hold')) setTimeout(() => { const o = OBJECTS.find(x => x.des === qs.get('hold')); if (o) { lookAt(o.quad); hold(o); } }, 300);
+
+// ---------------------------------------------------------------- Phone AR (magic window)
+// No WebXR on iOS/most phones: the gyroscope + compass steer the view instead, the rear camera shows behind the
+// sky, and the compass gives a first alignment (Polaris refines it). Same algorithm as three's old
+// DeviceOrientationControls: alpha/beta/gamma -> quaternion, corrected for screen orientation.
+let phoneMode = false, orient = null;
+// Yaw comes from the gyro-integrated alpha (smooth); the magnetometer only sets north once, as the circular mean of
+// its first samples, because it wobbles several degrees indoors. Polaris alignment then adjusts `yaw` as usual.
+let headingCorr = 0, corrSamples = [], corrLocked = false;
+const _zee = new THREE.Vector3(0, 0, 1), _euler = new THREE.Euler(), _q0 = new THREE.Quaternion(), _q1 = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
+function applyOrientation() {
+  if (!orient) return;
+  const a = ((orient.alpha || 0) + headingCorr) * DEG, b = (orient.beta || 0) * DEG, g = (orient.gamma || 0) * DEG;
+  const so = ((screen.orientation && screen.orientation.angle) || window.orientation || 0) * DEG;
+  _euler.set(b, a, -g, 'YXZ');
+  camera.quaternion.setFromEuler(_euler).multiply(_q1).multiply(_q0.setFromAxisAngle(_zee, -so));
+}
+function onOrient(e) {
+  if (e.alpha == null) return;
+  orient = { alpha: e.alpha, beta: e.beta, gamma: e.gamma };
+  // iOS: alpha is relative (gyro); webkitCompassHeading is degrees clockwise from north. Android absolute events
+  // already have alpha referenced to north, so no correction is needed there.
+  if (!corrLocked && e.webkitCompassHeading != null && e.webkitCompassAccuracy !== -1) {
+    corrSamples.push((360 - e.webkitCompassHeading - e.alpha) * DEG);
+    const sx = corrSamples.reduce((t, v) => t + Math.cos(v), 0), sy = corrSamples.reduce((t, v) => t + Math.sin(v), 0);
+    headingCorr = Math.atan2(sy, sx) / DEG;
+    if (corrSamples.length >= 90) corrLocked = true;             // ~1.5 s of samples, then hold
+  }
+}
+async function startPhone() {
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
+      const r = await DeviceOrientationEvent.requestPermission(); if (r !== 'granted') throw new Error('motion permission refused');
+    }
+    window.addEventListener('deviceorientationabsolute', onOrient, true);
+    window.addEventListener('deviceorientation', onOrient, true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      const v = $('cam'); v.srcObject = stream; v.style.display = 'block';
+    } catch (e) { /* no camera: sky on black is fine */ }
+    phoneMode = true; setFov(62); headingCorr = 0; corrSamples = []; corrLocked = false;
+    setTimeout(() => { if (phoneMode && !orient) notice('No motion data — the browser blocked the gyroscope (frame/permission). Open the full-page URL.'); }, 2000);
+    hud.style.display = 'flex'; $('drawer').hidden = true;
+    $('hudExit').onclick = stopPhone;
+    $('xrhint').textContent = 'Phone AR: compass sets north; put Polaris in the reticle and tap Align to refine.';
+    updateSky();
+  } catch (err) { notice('Phone AR failed: ' + err.message + (window.self !== window.top ? ' — open the page outside the viewer (full-page URL)' : '')); }
+}
+function notice(msg) { $('xrhint').textContent = msg; $('alignText').textContent = msg; $('hudState').textContent = msg; hud.style.display = 'flex'; }
+function stopPhone() {
+  phoneMode = false; orient = null;
+  window.removeEventListener('deviceorientationabsolute', onOrient, true); window.removeEventListener('deviceorientation', onOrient, true);
+  const v = $('cam'); if (v.srcObject) { v.srcObject.getTracks().forEach(t => t.stop()); v.srcObject = null; } v.style.display = 'none';
+  hud.style.display = 'none'; setFov(70); setCam(); updateSky();
+}
+$('phone').onclick = startPhone;
+if (typeof DeviceOrientationEvent !== 'undefined' && ('ontouchstart' in window)) $('phone').hidden = false;
+if (window.self !== window.top) $('alignText').textContent = 'Inside a viewer frame: AR/phone modes need the full-page URL';
+
+// ---------------------------------------------------------------- WebXR sessions
+async function start(mode) {
+  const init = { optionalFeatures: ['local-floor', 'hand-tracking', 'dom-overlay'], domOverlay: { root: hud } };
+  try {
+    const session = await navigator.xr.requestSession(mode, init);
+    session.addEventListener('end', () => { hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); });
+    await renderer.xr.setSession(session);
+    hud.style.display = 'flex'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = true);
+    $('hudExit').onclick = () => session.end();
+    updateSky();
+  } catch (err) { notice('Could not start ' + mode + ': ' + err.message + (window.self !== window.top ? ' — WebXR needs the page open outside the viewer' : '')); }
+}
+if (navigator.xr) {
+  Promise.all([navigator.xr.isSessionSupported('immersive-ar').catch(() => false), navigator.xr.isSessionSupported('immersive-vr').catch(() => false)]).then(([ar, vr]) => {
+    $('ar').disabled = !ar; $('vr').disabled = !vr;
+    $('xrhint').textContent = ar ? 'Passthrough AR available on this browser.' : vr ? 'VR available (no passthrough).' : 'No immersive session on this browser; desktop view.';
+  });
+} else { $('xrhint').textContent = ('ontouchstart' in window) ? 'No WebXR on this browser — use Phone AR (gyro + compass).' : 'WebXR not available here; desktop view.'; }
+$('ar').onclick = () => start('immersive-ar');
+$('vr').onclick = () => start('immersive-vr');
+
+// ---------------------------------------------------------------- loop
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+let last = 0, lastL = 0;
+updateSky();
+renderer.setAnimationLoop(tms => {
+  if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
+  const eye = eyeOf();
+  horizon.position.copy(eye); sky.matrix.setPosition(eye);        // sky and horizon ride with the eye: everything is at infinity
+  if (!heldObj) updateGuide(tms);
+  const q = (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera).getWorldQuaternion(new THREE.Quaternion());
+  for (const L of LABELS) {                                        // screen-aligned billboards that fade in and out
+    const m = L.mesh; m.quaternion.copy(q);
+    const o = m.material.opacity + (L.target - m.material.opacity) * 0.2;
+    m.material.opacity = o; m.visible = o > 0.02;
+  }
+  if (phoneMode) applyOrientation();
+  renderer.setClearColor(0x000000, (renderer.xr.isPresenting && renderer.xr.getSession()?.environmentBlendMode !== 'opaque') || (phoneMode && $('cam').srcObject) ? 0 : 1);
+  renderer.render(scene, camera);
+});
+</script>
