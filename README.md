@@ -67,17 +67,11 @@ solves on the mount with plate solving and AstroXR will solve on the headset wit
   at the edge of the view points the way to turn with the angle left ("turn down · 48°"); within 2° you are on
   target and the trigger (desktop: double-click) pulls it closer. `L` turns the desktop view onto the target.
 - **Open an object**: click it (headset: look at it and pull the trigger) and it opens as a framed photograph in
-  front of you, on an opaque backing inside a bright frame, with the sky behind dimmed to a tenth. Where a curated
-  image exists it is used (see below); otherwise the field is fetched from hips2fits — PanSTARRS DR1 for objects
-  under 16' north of -29 deg, DSS2 colour otherwise. The card gives name, designation, size, the field in degrees,
-  the image credit and the magnification. Click again or Esc to close.
-- **Curated imagery**: the famous objects are clipped or missing in the surveys (M42's core saturates on every DSS2
-  plate), so `tools/build_featured.py` matches each object against the **AAS WorldWide Telescope study
-  collections** — press imagery that is already plate-solved, every image carrying its centre, field, rotation and
-  credit, served as a tile pyramid. It picks the image centred on the object whose field best frames it, stitches
-  the pyramid and bundles it. Only freely licensed collections are used (NOIRLab/NOAO, Gemini, Hubble/ESA,
-  Spitzer, Chandra); WWT's amateur "astrophoto" collection is excluded because it is All Rights Reserved, and any
-  image whose credit asserts copyright is skipped.
+  front of you — a tight field (1.15x the object) fetched at full resolution from hips2fits, PanSTARRS DR1 for
+  objects under 16' north of -29 deg and DSS2 colour otherwise, on an opaque backing inside a bright frame, with
+  the sky behind dimmed to a tenth. The card gives name, designation, size, field and magnification. Click again
+  or Esc to close. (Curated press imagery from the WorldWide Telescope study collections was tried and reverted:
+  coverage and framing were too inconsistent object to object — see git history for the builder.)
 - **Horizon and N/E/S/W** cue in the gravity-aligned frame; sky-brightness slider for light-polluted passthrough.
 - **Desktop UI**: slim top bar (Enter AR, alignment state), collapsible settings drawer, object strip along the
   bottom (dimmed when below the horizon), drag to look, wheel to zoom, `A` to align, `?look=`/`?hold=`/`?fov=` URL
@@ -133,6 +127,4 @@ python tools/inline_data.py         # inline library + stars + constellations in
 
 Mellinger Milky Way panorama (Axel Mellinger) and DSS2 (© STScI, AAO/UKSTU, Palomar/Caltech) via CDS hips2fits
 ("This research made use of hips2fits, a service provided by CDS"). Object catalogue: OpenNGC by Mattia Verga
-(CC-BY-SA-4.0) via ScopeControl. Stars and constellations: d3-celestial datasets (BSD). Curated object imagery via the AAS WorldWide Telescope study collections: NOIRLab/NOAO/KPNO/CTIO (T.A. Rector,
-Bill Schoening and others), Gemini Observatory, NASA/ESA Hubble, NASA/JPL-Caltech Spitzer and Chandra — each
-image's own credit is shown on its card in the app. Astronomy by astronomy-engine (MIT). Rendering by three.js (MIT).
+(CC-BY-SA-4.0) via ScopeControl. Stars and constellations: d3-celestial datasets (BSD). Astronomy by astronomy-engine (MIT). Rendering by three.js (MIT).
