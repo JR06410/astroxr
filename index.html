@@ -285,12 +285,15 @@ function placeLabels() {
   const rank = L => (L.gazed ? -1 : 0) + (L.shownAt && now - L.shownAt < 1500 ? 0 : 1) * (L.kind === 'object' || L.kind === 'body' || L.kind === 'planet' ? 0 : L.kind === 'lib' ? 1 : L.kind === 'star' ? 2 : 3);
   const order = LABELS.filter(L => L.on && wants(L)).sort((a, b) => rank(a) - rank(b) || (a.kind === 'star' ? a.mag - b.mag : 0));
   // candidate anchors: below the object (default), to its right, above — the first that clears the accepted boxes wins
+  // The offset from the object is an angle, so it has to shrink with the field of view: a fixed 0.6 deg drop is
+  // nothing at 70 deg but most of the screen at 1 deg, which is why zoomed-in names drifted away from their object.
   const place = (L, where) => {
     const axis = new THREE.Vector3().crossVectors(up, L.d).normalize(); if (axis.lengthSq() < 1e-6) axis.set(1, 0, 0);
     const alt = Math.asin(L.d.y) / DEG;
-    if (where === 'below') return L.d.clone().applyAxisAngle(axis, L.dropDeg * DEG);
-    if (where === 'above') return L.d.clone().applyAxisAngle(axis, -L.dropDeg * DEG);
-    return L.d.clone().applyAxisAngle(up, -(L.hw + L.aw + 0.25) / Math.max(0.2, Math.cos(alt * DEG)) * DEG);   // right
+    const drop = Math.min(L.dropDeg, fov * 0.13);
+    if (where === 'below') return L.d.clone().applyAxisAngle(axis, drop * DEG);
+    if (where === 'above') return L.d.clone().applyAxisAngle(axis, -drop * DEG);
+    return L.d.clone().applyAxisAngle(up, -Math.min(L.hw + L.aw + 0.25, fov * 0.18) / Math.max(0.2, Math.cos(alt * DEG)) * DEG);   // right
   };
   const box = (L, pv) => ({ alt: Math.asin(pv.y) / DEG, az: Math.atan2(pv.x, -pv.z) / DEG, hw: L.hw, hh: L.hh });
   const collide = (A, B) => {
