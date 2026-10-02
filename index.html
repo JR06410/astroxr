@@ -608,16 +608,16 @@ function hold(o) {
   let card;
   if (o.hiTex) useHi();
   else if (HIPS.enabled && !o.hiLoading) {
-    // Survey priority, tried in order until one returns a frame with usable pixels (hips2fits hands back a blank
-    // or white frame where a survey has no coverage). PanSTARRS is sharpest for small objects but stops at
-    // dec -29 and clips nothing; DSS2 colour is the all-sky backstop with natural plate colour; DESI Legacy DR10
-    // is deeper than either but its g/r/z composite renders galaxies teal, so it only stands in where both fail.
+    // Broadband surveys only, so colours stay close to what the eye and a camera record. PanSTARRS DR1 is sharper
+    // for small objects but stops at dec -29; DSS2 colour is the all-sky backstop. Candidates are tried in order
+    // until one returns usable pixels, because hips2fits hands back a blank or white frame outside a survey's
+    // footprint. Tested and rejected: DESI Legacy DR10 is deeper but its g/r/z composite renders galaxies teal,
+    // and the NSNS narrowband survey shows far more nebula structure but in an [OIII]/Ha/[SII] palette.
     o.hiLoading = true;
     const px = 1600, py = Math.round(px / aspect);
     const tries = [];
     if (o.size[0] <= 16 && o.dec > -29) tries.push(['CDS/P/PanSTARRS/DR1/color', 'PanSTARRS DR1']);
     tries.push(['CDS/P/DSS2/color', 'DSS2 colour']);
-    tries.push(['CDS/P/DESI-Legacy-Surveys/DR10/color', 'DESI Legacy DR10']);   // deeper but g/r/z renders galaxies teal: last resort
     const usable = img => {                                           // reject no-coverage frames
       const n = 48, c = document.createElement('canvas'); c.width = c.height = n;
       const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0, n, n);
