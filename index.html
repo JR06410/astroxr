@@ -239,7 +239,7 @@ const labels = new THREE.Group(); scene.add(labels);
 const LABELS = [];
 function addLabel(anchor, lines, dropDeg, color, heightDeg, px, kind, mag = 0, aw = 0.3) {
   const m = label(lines, color, heightDeg, px); labels.add(m); m.material.opacity = 0; m.visible = false;
-  LABELS.push({ mesh: m, anchor, dropDeg, kind, mag, aw, target: 0 }); return m;
+  LABELS.push({ mesh: m, anchor, dropDeg, kind, mag, aw, target: 0, base: m.scale.clone() }); return m;
 }
 function placeLabels() {
   sky.updateMatrixWorld(true);
@@ -259,7 +259,8 @@ function placeLabels() {
     if ((L.kind === 'lib' || L.kind === 'object') && L.dot > nearCone) loadTex(L.anchor.userData.obj);
     L.hw = ang(L.mesh.scale.x) * 0.35; L.hh = ang(L.mesh.scale.y) * 0.5;      // text box, degrees (text fills ~70% of the canvas)
     L.gazed = L.dot > gaze && L.kind !== 'con';
-    if (L.kind === 'lib' && L.dot > cone && L.anchor.visible) near.push(L);
+    L.on = L.anchor.visible || L.kind === 'lib' || L.kind === 'object';           // object labels live on even when the cut-out yields to tiles
+    if (L.kind === 'lib' && L.dot > cone && L.on) near.push(L);
   }
   updateHips(fwd, performance.now());
   for (const r of REGIONS) {                                                   // survey plates load as the view approaches them
@@ -273,7 +274,7 @@ function placeLabels() {
       : L.kind === 'lib' ? allow.has(L) : L.kind === 'con' ? $('cons').checked : true);
   // priority: what the reticle is on, then recently shown labels (stability), then featured/bodies, library by size, stars by brightness
   const rank = L => (L.gazed ? -1 : 0) + (L.shownAt && now - L.shownAt < 1500 ? 0 : 1) * (L.kind === 'object' || L.kind === 'body' || L.kind === 'planet' ? 0 : L.kind === 'lib' ? 1 : L.kind === 'star' ? 2 : 3);
-  const order = LABELS.filter(L => L.anchor.visible && wants(L)).sort((a, b) => rank(a) - rank(b) || (a.kind === 'star' ? a.mag - b.mag : 0));
+  const order = LABELS.filter(L => L.on && wants(L)).sort((a, b) => rank(a) - rank(b) || (a.kind === 'star' ? a.mag - b.mag : 0));
   // candidate anchors: below the object (default), to its right, above — the first that clears the accepted boxes wins
   const place = (L, where) => {
     const axis = new THREE.Vector3().crossVectors(up, L.d).normalize(); if (axis.lengthSq() < 1e-6) axis.set(1, 0, 0);
@@ -824,8 +825,9 @@ renderer.setAnimationLoop(tms => {
   horizon.position.copy(eye); sky.matrix.setPosition(eye);        // sky and horizon ride with the eye: everything is at infinity
   if (!heldObj) updateGuide(tms);
   const q = (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera).getWorldQuaternion(new THREE.Quaternion());
+  const kz = renderer.xr.isPresenting ? 1 : Math.min(1.7, Math.max(0.1, 1.4 * camera.fov / 70));   // constant on-screen size when zooming
   for (const L of LABELS) {                                        // screen-aligned billboards that fade in and out
-    const m = L.mesh; m.quaternion.copy(q);
+    const m = L.mesh; m.quaternion.copy(q); m.scale.copy(L.base).multiplyScalar(kz);
     const o = m.material.opacity + (L.target - m.material.opacity) * 0.2;
     m.material.opacity = o; m.visible = o > 0.02;
   }
