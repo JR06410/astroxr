@@ -811,24 +811,13 @@ const hiRing = (() => {
 // (opaque, unfeathered, above the tiles) so it is unmistakable that it is selected.
 const frame = new THREE.Group(); sky.add(frame); frame.visible = false;
 function showSelected(o, on) {
+  // Selecting an object used to frame it and draw its cut-out solid. Now that a click zooms to the object, the
+  // zoom itself shows what was chosen, so the only marks left are the strip chip and the guidance chevron.
+  frame.visible = false;
   const m = o.quad.material;
-  if (on) {
-    loadTex(o);
-    m.blending = THREE.NormalBlending; m.uniforms.feather.value = 0.0; m.uniforms.gain.value = 1.0; m.needsUpdate = true;
-    o.quad.visible = true; o.quad.renderOrder = 5;
-    frame.clear();
-    const w = chord(o.field[0] * ARCMIN), h = chord(o.field[1] * ARCMIN);
-    for (const k of [1.0, 1.025]) {
-      const pts = [new THREE.Vector3(-w * k / 2, -h * k / 2, 0), new THREE.Vector3(w * k / 2, -h * k / 2, 0), new THREE.Vector3(w * k / 2, h * k / 2, 0), new THREE.Vector3(-w * k / 2, h * k / 2, 0)];
-      frame.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xffb05a, depthTest: false, transparent: true, opacity: 0.95 })));
-    }
-    frame.position.copy(o.quad.position).multiplyScalar(0.99); frame.quaternion.copy(o.quad.quaternion); frame.renderOrder = 6; frame.visible = true;
-  } else {
-    m.blending = THREE.AdditiveBlending; m.uniforms.feather.value = 0.14; m.uniforms.gain.value = +$('gain').value; m.needsUpdate = true;
-    o.quad.renderOrder = 0;
-    o.quad.visible = !!m.uniforms.map.value && !(o.covered && $('regions').checked) && !(HIPS.enabled && HIPS.loaded.size > 0);
-    frame.visible = false; frame.clear();
-  }
+  m.blending = THREE.AdditiveBlending; m.uniforms.feather.value = 0.14; m.uniforms.gain.value = +$('gain').value; m.needsUpdate = true;
+  o.quad.renderOrder = 0;
+  o.quad.visible = !!m.uniforms.map.value && !(o.covered && $('regions').checked) && !(HIPS.enabled && HIPS.loaded.size > 0);
 }
 function setTarget(o) {
   if (target) showSelected(target, false);
@@ -1059,8 +1048,6 @@ renderer.setAnimationLoop(tms => {
   horizon.position.copy(eye); sky.matrix.setPosition(eye);        // sky and horizon ride with the eye: everything is at infinity
   // The sky really does rotate (15 deg/hour), so at a narrow field the view drifts off an object within a minute.
   // While an object is selected and the field is narrow, keep the view on it -- the same job a tracking mount does.
-  // the selection frame marks where an object is; once the view is inside it it only shows as stray lines
-  if (frame.visible !== false && target) frame.visible = camera.fov > target.field[0] / 60 * 1.3 || renderer.xr.isPresenting;
   if (!heldObj) updateGuide(tms);
   else if (!renderer.xr.isPresenting) {                            // the open view keeps its apparent size when the desktop zooms
     const k = camera.fov / 70; held.scale.setScalar(k); held.position.z = -1.2 * (1 - k);
