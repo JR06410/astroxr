@@ -355,8 +355,10 @@ for (const o of OBJECTS) {
   edge.name = 'outline'; edge.visible = false; sky.add(edge); edge.position.copy(quad.position); edge.quaternion.copy(quad.quaternion); o.edge = edge;
   o.moons = (o.size[0] / 30).toFixed(o.size[0] < 30 ? 2 : 1);
   const kind = o.type ? (TYPE_LABEL[o.type] || o.type) : '';
+  o.labelOf = o;
   o.label = addLabel(quad, [o.name, `${o.des}  ·  ${kind ? kind + '  ·  ' : ''}${o.dims}`], o.size[1] / 120 + 0.6, '#e8ecf4', 0.9, 56, o.featured ? 'object' : 'lib', 0, o.field[0] / 120);
 }
+for (const o of OBJECTS) if (o.label) o.label.userData.obj = o;      // so a click on the name finds the object
 const FEATURED = OBJECTS.filter(o => o.featured);
 
 // Regional survey plates (DSS2 colour, 1.5 px/arcmin): continuous nebulosity across the rich areas, drawn under
@@ -744,6 +746,10 @@ const ray = new THREE.Raycaster();
 function objectInView(ndc) {                      // ndc: pointer position (desktop); default = the reticle
   sky.updateMatrixWorld(true);
   if (ndc) ray.setFromCamera(ndc, camera); else ray.set(eyeOf(), fwdOf());
+  // a click on the name is a click on the object: labels are placed off to one side, so test them first and
+  // exactly (they are flat quads facing the viewer), before falling back to proximity on the sky
+  const lab = ray.intersectObjects(OBJECTS.map(o => o.label).filter(m => m && m.visible), false)[0];
+  if (lab && lab.object.userData.obj) return lab.object.userData.obj;
   const dir = ray.ray.direction.clone().normalize(), eye = ray.ray.origin;
   const fov = renderer.xr.isPresenting ? 90 : camera.fov;
   const slack = Math.max(0.015 * fov, 0.04);      // small objects stay clickable at any zoom
