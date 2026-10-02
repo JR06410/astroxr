@@ -594,10 +594,10 @@ function hold(o) {
   const card = label([o.name, `${o.des}  ·  ${o.dims}`, `magnified ×${mag.toFixed(0)} — Moon shown at the same magnification`], '#e8ecf4', 0.9, 56);
   card.scale.multiplyScalar(0.065); card.position.set(0, -h / 2 - 0.16, -D); held.add(card);
   const ml = label(['Moon'], '#ffe6be', 0.6, 48); ml.scale.multiplyScalar(0.045); ml.position.set(moonDisc.position.x, moonDisc.position.y - md - 0.05, -D); held.add(ml);
-  held.visible = true; o.quad.visible = false; labels.visible = false; guide.visible = false; hiRing.visible = false;
+  held.visible = true; o.quad.visible = false; labels.visible = false; guide.visible = false; hiRing.visible = false; frame.visible = false;
   document.querySelectorAll('#strip button').forEach(b => b.classList.toggle('active', b.dataset.des === o.des));
 }
-function release() { if (!heldObj) return; heldObj.quad.visible = true; labels.visible = true; heldObj = null; held.visible = false; held.clear(); document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active')); }
+function release() { if (!heldObj) return; heldObj.quad.visible = true; labels.visible = true; if (target) showSelected(target, true); heldObj = null; held.visible = false; held.clear(); document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active')); }
 const ray = new THREE.Raycaster();
 function objectInView(ndc) {                      // ndc: optional pointer position (desktop); default = the reticle
   sky.updateMatrixWorld(true);
@@ -634,15 +634,34 @@ const hiRing = (() => {
   const l = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xffb05a, transparent: true, opacity: 0.9, depthWrite: false }));
   l.visible = false; sky.add(l); return l;
 })();
+// Selection frame: a bright double outline around the chosen object, whose own cut-out is shown solid
+// (opaque, unfeathered, above the tiles) so it is unmistakable that it is selected.
+const frame = new THREE.Group(); sky.add(frame); frame.visible = false;
+function showSelected(o, on) {
+  const m = o.quad.material;
+  if (on) {
+    loadTex(o);
+    m.blending = THREE.NormalBlending; m.uniforms.feather.value = 0.0; m.uniforms.gain.value = 1.0; m.needsUpdate = true;
+    o.quad.visible = true; o.quad.renderOrder = 5;
+    frame.clear();
+    const w = chord(o.field[0] * ARCMIN), h = chord(o.field[1] * ARCMIN);
+    for (const k of [1.0, 1.025]) {
+      const pts = [new THREE.Vector3(-w * k / 2, -h * k / 2, 0), new THREE.Vector3(w * k / 2, -h * k / 2, 0), new THREE.Vector3(w * k / 2, h * k / 2, 0), new THREE.Vector3(-w * k / 2, h * k / 2, 0)];
+      frame.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xffb05a, depthTest: false, transparent: true, opacity: 0.95 })));
+    }
+    frame.position.copy(o.quad.position).multiplyScalar(0.99); frame.quaternion.copy(o.quad.quaternion); frame.renderOrder = 6; frame.visible = true;
+  } else {
+    m.blending = THREE.AdditiveBlending; m.uniforms.feather.value = 0.14; m.uniforms.gain.value = +$('gain').value; m.needsUpdate = true;
+    o.quad.renderOrder = 0;
+    o.quad.visible = !!m.uniforms.map.value && !(o.covered && $('regions').checked) && !(HIPS.enabled && HIPS.loaded.size > 0);
+    frame.visible = false; frame.clear();
+  }
+}
 function setTarget(o) {
+  if (target) showSelected(target, false);
   target = o === target ? null : o;
   document.querySelectorAll('#strip button').forEach(b => b.classList.toggle('active', !!target && b.dataset.des === target.des));
-  if (target) {
-    const d = dirOf(target.ra, target.dec);
-    hiRing.position.copy(d).multiplyScalar(R * 0.995); hiRing.quaternion.setFromRotationMatrix(frameAt(d));
-    const rr = R * Math.tan(Math.hypot(target.field[0], target.field[1]) / 2 * ARCMIN) * 1.15;
-    hiRing.scale.set(rr, rr, 1);
-  }
+  if (target) showSelected(target, true);
   hiRing.visible = false; guide.visible = false; guideTextKey = '';
 }
 function updateGuide(tms) {
@@ -655,7 +674,7 @@ function updateGuide(tms) {
   const inView = sepDeg < 0.42 * Math.min(fovV, fovH);
   const k = renderer.xr.isPresenting ? 1 : fovV / 70;                                // shrink the glyphs (not their distance) as the view narrows
   chevron.scale.setScalar(k);
-  hiRing.visible = inView; hiRing.material.opacity = 0.55 + 0.4 * Math.sin(tms / 180);
+  hiRing.visible = false;
   guide.visible = !inView || sepDeg > 2;
   const D = 1.5, edge = D * Math.tan(0.36 * Math.min(fovV, fovH) * DEG);
   const dir = new THREE.Vector2(v.x, v.y); if (dir.lengthSq() < 1e-8) dir.set(1, 0); dir.normalize();

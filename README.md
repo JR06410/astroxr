@@ -62,10 +62,10 @@ solves on the mount with plate solving and AstroXR will solve on the headset wit
   it never moves, so one alignment holds all night, and its altitude equals your latitude. It carries a standing
   orange ring; put the reticle on the real star and pull the trigger / pinch / press Align, and the sky rotates
   so the computed Polaris lands on it. The top bar shows "Aligned on Polaris · 3 min ago" and nags after 10 min.
-- **Guidance to a target**: pick an object in the strip or search and a chevron at the edge of the view points
-  the way to turn, with the angle left ("turn down · 48°"). Once the object is in view the chevron gives way to a
-  pulsing ring around it; within 2° you are on target and the trigger pulls it closer. Same mechanism on desktop
-  (`L` turns the view straight onto the target).
+- **Selection and guidance**: pick an object in the strip, by search, or by clicking it (desktop). It is framed
+  by a bright double outline with its own cut-out shown solid inside, so the selection is unmistakable; a chevron
+  at the edge of the view points the way to turn with the angle left ("turn down · 48°"); within 2° you are on
+  target and the trigger (desktop: double-click) pulls it closer. `L` turns the desktop view onto the target.
 - **Pull it closer**: look at an object and pull the trigger (desktop: click it or its chip) and it comes forward
   to 1.2 m, magnified to a 32° field, with a Moon disc at the *same* magnification and a card giving size,
   Moon diameters and the magnification. Trigger/Esc releases it.
