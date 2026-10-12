@@ -77,6 +77,9 @@
   #hud .hrow { display: flex; gap: 10px; }
   #hud button { font-size: 23px; padding: 14px 22px; background: var(--panel); }
   #hud .primary { background: var(--accent); }
+  #heardDesk { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(130px + env(safe-area-inset-bottom, 0px)); z-index: 4; font-size: 15px; color: var(--accent); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 5px 14px; }
+  #hud #heard { font-size: 17px; color: var(--accent); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 5px 14px; }
+  #voice.on, #hud #hudVoice.on { background: var(--accent); color: #1a1206; border-color: var(--accent); font-weight: 600; }
   #hud #hudState { cursor: pointer; font-size: 18px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; }
   @media (max-width: 600px) { #brand { font-size: 16px; } }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -87,6 +90,7 @@
   <button id="ar" class="primary" disabled>Enter AR</button>
   <button id="vr" disabled>VR</button>
   <button id="phone" hidden>Phone AR</button>
+  <button id="voice" class="quiet" title="Voice commands: align, zoom in, zoom out, return, freeze (V)">Voice</button>
   <div id="align-state"><i></i><span id="alignText">Not aligned</span></div>
   <div class="spacer"></div>
   <button id="settings" class="quiet" aria-expanded="false">Settings</button>
@@ -141,12 +145,15 @@
 <div id="strip"></div>
 
 <video id="cam" autoplay muted playsinline></video>
+<div id="heardDesk" hidden></div>
 <div id="hud">
   <div id="hudState">Not aligned</div>
   <div class="hrow">
     <button id="hudAlign" class="primary">Align on Polaris</button>
+    <button id="hudVoice">Voice</button>
     <button id="hudExit">Exit</button>
   </div>
+  <div id="heard" hidden></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js"></script>
@@ -999,6 +1006,48 @@ addEventListener('pointermove', e => { if (!drag || renderer.xr.isPresenting || 
 addEventListener('wheel', e => { setFov(camera.fov * (e.deltaY > 0 ? 1.12 : 1 / 1.12)); prefetch(); }, { passive: true });
 $('zin').onclick = () => zoom(1 / 1.6); $('zout').onclick = () => zoom(1.6); $('zret').onclick = zoomReturn;
 $('ztrk').onclick = () => setFrozen(!frozenAt);
+
+// ---------------------------------------------------------------- voice commands (Web Speech API)
+// Hands-free in the headset: "align", "zoom in" / "closer", "zoom out" / "wider", "return" / "reset",
+// "freeze" / "live". Continuous recognition; browsers end a session every so often, so it is restarted
+// while the toggle is on. The mic permission prompt is a browser dialog, so switch Voice on BEFORE
+// entering VR/AR (the toggle state carries into the session). Feature-detected: without the API the
+// button is disabled and says so instead of silently doing nothing.
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, voiceOn = false, voiceRestart = 0;
+const VOICE = [
+  [/\b(align|aligned|a line|online)\b/, 'align', () => alignOn(POLARIS)],
+  [/\b(zoom in|zoomin|closer|magnify|bigger)\b/, 'zoom in', () => zoom(1 / 1.6)],
+  [/\b(zoom out|zoomout|wider|smaller|back out)\b/, 'zoom out', () => zoom(1.6)],
+  [/\b(return|reset|wide view|go back)\b/, 'return', zoomReturn],
+  [/\b(freeze|frozen|hold still)\b/, 'freeze', () => setFrozen(true)],
+  [/\b(unfreeze|live|release)\b/, 'sky live', () => setFrozen(false)],
+];
+function heard(text, ok) {
+  const el = $(renderer.xr.isPresenting ? 'heard' : 'heardDesk');
+  el.hidden = false; el.textContent = (ok ? 'mic: ' : 'mic ? ') + text; el.style.color = ok ? '' : 'var(--muted)';
+  clearTimeout(heard.t); heard.t = setTimeout(() => { el.hidden = true; }, 2500);
+}
+function voiceLabel() { const t = voiceOn ? 'Voice on' : 'Voice'; for (const id of ['voice', 'hudVoice']) { $(id).textContent = t; $(id).classList.toggle('on', voiceOn); } }
+function startVoice() {
+  if (!SR) { notice('No speech recognition in this browser'); return; }
+  try { rec = new SR(); } catch (e) { notice('Speech recognition failed: ' + e.message); return; }
+  rec.lang = 'en-GB'; rec.continuous = true; rec.interimResults = false; rec.maxAlternatives = 3;
+  rec.onresult = ev => {
+    const r = ev.results[ev.results.length - 1]; if (!r.isFinal) return;
+    const alts = Array.from(r).map(a => a.transcript.toLowerCase().trim());
+    for (const [re, name, fn] of VOICE) if (alts.some(t => re.test(t))) { heard(name, true); fn(); return; }
+    heard(alts[0] || '', false);
+  };
+  rec.onerror = ev => { if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') { voiceOn = false; voiceLabel(); notice('Microphone blocked for this page'); } };
+  rec.onend = () => { if (voiceOn) voiceRestart = setTimeout(() => { try { rec.start(); } catch {} }, 250); };
+  try { rec.start(); } catch (e) { notice('Speech recognition failed: ' + e.message); voiceOn = false; voiceLabel(); }
+}
+function stopVoice() { clearTimeout(voiceRestart); if (rec) { rec.onend = null; try { rec.stop(); } catch {} rec = null; } }
+function toggleVoice() { voiceOn = !voiceOn; voiceLabel(); if (voiceOn) startVoice(); else stopVoice(); }
+$('voice').onclick = toggleVoice; $('hudVoice').onclick = toggleVoice;
+if (!SR) { for (const id of ['voice', 'hudVoice']) { $(id).disabled = true; $(id).title = 'Speech recognition is not available in this browser'; } }
+addEventListener('keydown', e => { if (e.key === 'v' && !e.ctrlKey && !e.metaKey && e.target.tagName !== 'INPUT') toggleVoice(); });
 addEventListener('wheel', () => { const f = camera.fov < TRACK_FOV; if (f !== !!frozenAt) setFrozen(f); }, { passive: true });
 setCam();
 const qs = new URLSearchParams(location.search);
