@@ -96,6 +96,18 @@ solves on the mount with plate solving and AstroXR will solve on the headset wit
   bottom (dimmed when below the horizon), drag to look, wheel to zoom, `A` to align, `?look=`/`?hold=`/`?fov=` URL
   params for testing.
 
+## Voice commands
+
+**Voice** (top bar, headset HUD, or `V`) listens for *align*, *zoom in* / *closer*, *zoom out* / *wider*,
+*return* / *reset*, *freeze* / *live*, and shows what it heard for a moment. Switch it on **before** entering
+VR/AR: the microphone permission is a browser dialog, hidden once the session starts; the toggle carries in.
+Two back ends behind one button: the Web Speech API where the browser has it (desktop Chrome/Edge/Safari), and
+**Vosk offline** where it does not. The Quest Browser has no Web Speech API (Meta's forum, 2024; the Voice SDK is
+Unity/Unreal only), so there the first use downloads the 40 MB small English model from `assets/vosk/` (cached
+afterwards) and recognises in a worker against a fixed grammar of the commands, which is far more reliable than
+open dictation for six phrases. The model is `vosk-model-small-en-us-0.15` repacked as a gzipped tar with a single
+`model/` folder, the layout vosk-browser expects.
+
 ## Phones (no WebXR)
 
 iOS Safari and most phone browsers have no WebXR, so **Enter AR** cannot work there. The **Phone AR** button
