@@ -75,9 +75,9 @@
   #hud { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(28px + env(safe-area-inset-bottom, 0px)); z-index: 4;
          display: none; flex-direction: column; align-items: center; gap: 10px; }
   #hud .hrow { display: flex; gap: 10px; }
-  #hud button { font-size: 18px; padding: 12px 18px; background: var(--panel); }
+  #hud button { font-size: 23px; padding: 14px 22px; background: var(--panel); }
   #hud .primary { background: var(--accent); }
-  #hud #hudState { cursor: pointer; font-size: 15px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; }
+  #hud #hudState { cursor: pointer; font-size: 18px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; }
   @media (max-width: 600px) { #brand { font-size: 16px; } }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -323,17 +323,27 @@ for (const L of DATA.library) {
 }
 const TYPE_LABEL = { G: 'Galaxy', GPair: 'Galaxy pair', GTrpl: 'Galaxy triplet', GGroup: 'Galaxy group', OCl: 'Open cluster', GCl: 'Globular cluster',
   '*Ass': 'Star association', PN: 'Planetary nebula', Neb: 'Nebula', HII: 'HII region', RfN: 'Reflection nebula', EmN: 'Emission nebula', SNR: 'Supernova remnant', 'Cl+N': 'Cluster + nebula' };
+// In the headset everything competes with passthrough and the eye sits ~2 m from a 50 m sphere, so the sky
+// labels read small and DSS2 nebulosity washes out against the room. Inside an immersive session: labels
+// and the guide text are drawn larger, and every plate / cut-out / tile gets more gain and a stronger
+// stretch (lower exponent lifts the faint outer nebulosity): more in AR, where passthrough competes,
+// a little less in VR. Desktop and phone are untouched.
+const XR = { labelScale: 1.6, boostAR: 1.7, boostVR: 1.6, stretch: 0.72, stretchDesk: 0.85 };
+let xrMode = null;                                             // 'immersive-ar' | 'immersive-vr' | null
+const xrBoost = () => (!renderer.xr.isPresenting ? 1 : xrMode === 'immersive-ar' ? XR.boostAR : XR.boostVR);
+const gainVal = () => +$('gain').value * xrBoost();
+const stretchVal = () => (renderer.xr.isPresenting ? XR.stretch : XR.stretchDesk);
 // Survey imagery material: subtracts the plate's own sky level (so a cut-out does not sit on the base sky as
 // a lighter box) and feathers the edges over the outer 14% of the field, then adds the result to the sky.
 function surveyMaterial() {
   return new THREE.ShaderMaterial({
-    uniforms: { map: { value: null }, black: { value: new THREE.Vector3(0, 0, 0) }, gain: { value: 1.0 }, feather: { value: 0.14 }, dechroma: { value: 1.0 } },
+    uniforms: { map: { value: null }, black: { value: new THREE.Vector3(0, 0, 0) }, gain: { value: 1.0 }, feather: { value: 0.14 }, dechroma: { value: 1.0 }, stretch: { value: 0.85 } },
     transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-    fragmentShader: `uniform sampler2D map; uniform vec3 black; uniform float gain; uniform float feather; uniform float dechroma; varying vec2 vUv;
+    fragmentShader: `uniform sampler2D map; uniform vec3 black; uniform float gain; uniform float feather; uniform float dechroma; uniform float stretch; varying vec2 vUv;
       void main(){ vec4 c = texture2D(map, vUv);
         float a = smoothstep(0.0, feather, vUv.x) * smoothstep(0.0, feather, 1.0 - vUv.x) * smoothstep(0.0, feather, vUv.y) * smoothstep(0.0, feather, 1.0 - vUv.y);
-        vec3 col = pow(max(c.rgb - black, 0.0), vec3(0.85)) * gain * a;    // mild stretch lifts faint nebulosity
+        vec3 col = pow(max(c.rgb - black, 0.0), vec3(stretch)) * gain * a;    // stretch < 1 lifts faint nebulosity (stronger in AR)
         // DSS2's colour comes from blue, red and near-IR plates exposed at different times, so a satellite that
         // crossed during one of them lands in a single channel and renders as a vividly saturated streak. Stars
         // and nebulae appear on all three plates and are far less saturated, so pulling back extreme chroma
@@ -440,7 +450,7 @@ function tileMesh(layer, ipix) {
   }
   for (let i = 0; i < G; i++) for (let j = 0; j < G; j++) { const a = i * (G + 1) + j, b = a + 1, c = a + G + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx);
-  const m = surveyMaterial(); m.uniforms.feather.value = 0.0; m.uniforms.gain.value = HIPS.gain; m.side = THREE.DoubleSide;
+  const m = surveyMaterial(); m.uniforms.feather.value = 0.0; m.uniforms.gain.value = HIPS.gain * gainVal(); m.uniforms.stretch.value = stretchVal(); m.side = THREE.DoubleSide;
   m.uniforms.dechroma.value = $('dechroma').checked ? 1 : 0;
   const mesh = new THREE.Mesh(g, m); mesh.visible = false; mesh.renderOrder = layer.order === 3 ? -3 : -2;
   return mesh;
@@ -744,9 +754,9 @@ function hold(o) {
 // while an object is open the sky behind it dims to a tenth, so the photograph reads on its own
 function dimSky(on) {
   const k = on ? 0.1 : 1;
-  skyMat.uniforms.gain.value = (on ? 0.1 : 1) * +$('gain').value;
-  for (const t of HIPS.loaded) t.mesh.material.uniforms.gain.value = HIPS.gain * k * +$('gain').value;
-  for (const r of REGIONS) r.quad.material.uniforms.gain.value = 2.2 * k * +$('gain').value;
+  skyMat.uniforms.gain.value = (on ? 0.1 : 1) * gainVal();
+  for (const t of HIPS.loaded) t.mesh.material.uniforms.gain.value = HIPS.gain * k * gainVal();
+  for (const r of REGIONS) r.quad.material.uniforms.gain.value = 2.2 * k * gainVal();
   constellations.visible = !on && $('cons').checked;
   for (const c of sky.children) if (c.isSprite) c.visible = !on;
   horizon.visible = !on;
@@ -836,7 +846,7 @@ function showSelected(o, on) {
   // zoom itself shows what was chosen, so the only marks left are the strip chip and the guidance chevron.
   frame.visible = false;
   const m = o.quad.material;
-  m.blending = THREE.AdditiveBlending; m.uniforms.feather.value = 0.14; m.uniforms.gain.value = +$('gain').value; m.needsUpdate = true;
+  m.blending = THREE.AdditiveBlending; m.uniforms.feather.value = 0.14; m.uniforms.gain.value = gainVal(); m.uniforms.stretch.value = stretchVal(); m.needsUpdate = true;
   o.quad.renderOrder = 0;
   o.quad.visible = !!m.uniforms.map.value && !(o.covered && $('regions').checked) && !(HIPS.enabled && HIPS.loaded.size > 0);
 }
@@ -855,7 +865,7 @@ function updateGuide(tms) {
   const sepDeg = Math.acos(Math.max(-1, Math.min(1, -v.z))) / DEG;
   const fovV = renderer.xr.isPresenting ? 85 : camera.fov, fovH = 2 * Math.atan(Math.tan(fovV / 2 * DEG) * (renderer.xr.isPresenting ? 1.1 : camera.aspect)) / DEG;
   const inView = sepDeg < 0.42 * Math.min(fovV, fovH);
-  const k = renderer.xr.isPresenting ? 1 : fovV / 70;                                // shrink the glyphs (not their distance) as the view narrows
+  const k = renderer.xr.isPresenting ? XR.labelScale * 0.85 : fovV / 70;             // shrink the glyphs (not their distance) as the view narrows; larger in the headset
   chevron.scale.setScalar(k);
   hiRing.visible = false;
   guide.visible = !inView || sepDeg > 2;
@@ -905,7 +915,14 @@ $('lon').onchange = e => { lon = +e.target.value; store('lon', lon); updateSky()
 $('geo').onclick = () => navigator.geolocation?.getCurrentPosition(p => { lat = +p.coords.latitude.toFixed(3); lon = +p.coords.longitude.toFixed(3); $('lat').value = lat; $('lon').value = lon; store('lat', lat); store('lon', lon); updateSky(); }, () => { $('geo').textContent = 'No fix'; });
 $('toff').oninput = e => { toff = +e.target.value; $('toffv').textContent = (toff >= 0 ? '+' : '') + toff.toFixed(1) + ' h'; updateSky(); };
 $('now').onclick = () => { toff = 0; $('toff').value = 0; $('toffv').textContent = '+0.0 h'; updateSky(); };
-$('gain').oninput = e => { const g = +e.target.value; skyMat.uniforms.gain.value = g; for (const o of OBJECTS) o.quad.material.uniforms.gain.value = g; for (const r of REGIONS) r.quad.material.uniforms.gain.value = 2.2 * g; for (const t of HIPS.loaded) t.mesh.material.uniforms.gain.value = HIPS.gain * g; };
+function applyGain() {                                             // slider x headset boost, onto every imagery material
+  const g = gainVal(), st = stretchVal();
+  skyMat.uniforms.gain.value = g;
+  for (const o of OBJECTS) { o.quad.material.uniforms.gain.value = g; o.quad.material.uniforms.stretch.value = st; }
+  for (const r of REGIONS) { r.quad.material.uniforms.gain.value = 2.2 * g; r.quad.material.uniforms.stretch.value = st; }
+  for (const t of HIPS.loaded) { t.mesh.material.uniforms.gain.value = HIPS.gain * g; t.mesh.material.uniforms.stretch.value = st; }
+}
+$('gain').oninput = applyGain;
 $('outlines').onchange = e => OBJECTS.forEach(o => { o.edge.visible = e.target.checked; });
 $('hips').onchange = e => { HIPS.enabled = e.target.checked; for (const t of HIPS.loaded) t.mesh.visible = HIPS.enabled; for (const t of HIPS.loaded) refreshParent(t); setHipsCoverage(HIPS.enabled && HIPS.loaded.size > 0); };
 $('regions').onchange = e => { REGIONS.forEach(r => { r.quad.visible = e.target.checked && r.loaded; }); OBJECTS.forEach(o => { if (o.loaded && o.quad.material.uniforms.map.value) o.quad.visible = !(e.target.checked && o.covered); }); };
@@ -1058,8 +1075,9 @@ async function start(mode) {
   const init = { optionalFeatures: ['local-floor', 'hand-tracking', 'dom-overlay'], domOverlay: { root: hud } };
   try {
     const session = await navigator.xr.requestSession(mode, init);
-    session.addEventListener('end', () => { hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); });
+    session.addEventListener('end', () => { xrMode = null; hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); applyGain(); });
     await renderer.xr.setSession(session);
+    xrMode = mode; applyGain();
     hud.style.display = 'flex'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = true);
     $('hudExit').onclick = () => session.end();
     updateSky();
@@ -1089,7 +1107,7 @@ renderer.setAnimationLoop(tms => {
     const k = camera.fov / 70; held.scale.setScalar(k); held.position.z = -1.2 * (1 - k);
   }
   const q = (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera).getWorldQuaternion(new THREE.Quaternion());
-  const kz = renderer.xr.isPresenting ? 1 : Math.min(1.7, Math.max(0.012, 1.4 * camera.fov / 70));  // constant on-screen size at any zoom
+  const kz = renderer.xr.isPresenting ? XR.labelScale : Math.min(1.7, Math.max(0.012, 1.4 * camera.fov / 70));  // constant on-screen size at any zoom; bigger in the headset
   for (const L of LABELS) {                                        // screen-aligned billboards that fade in and out
     const m = L.mesh; m.quaternion.copy(q); m.scale.copy(L.base).multiplyScalar(kz);
     const o = m.material.opacity + (L.target - m.material.opacity) * 0.2;

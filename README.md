@@ -130,6 +130,10 @@ Dependencies load from CDN: three.js 0.160 (cdnjs) and astronomy-engine 2.1.19 (
 
 ## Next steps
 
+0. **Your own photographs on their objects** — plate-solve each capture (ScopeControl already runs ASTAP, and a
+   SmartFits FITS may carry a WCS already), record centre, field and rotation per image, and show it in place of
+   the survey cut-out for that object, with the survey as the fallback everywhere else.
+
 1. Passthrough Camera API: IMU-constrained bright-object solve (Moon/planets/mag-3 stars) to replace manual alignment.
 2. Hand-tracked "pull forward" interaction: select an object, bring it close and large with its data.
 3. Stream higher-order HiPS tiles for the gaze direction instead of a single all-sky texture.
