@@ -1310,6 +1310,7 @@ const VOICE = [
 const GRAMMAR = ['align', 'zoom in', 'zoom out', 'closer', 'wider', 'return', 'reset', 'freeze', 'live', '[unk]'];
 function heard(text, ok) {
   console.log('[voice]', ok ? 'ok' : '??', text);
+  telemetry('voice ' + (ok ? 'ok ' : '?? ') + text);
   if (renderer.xr.isPresenting) hwSet('msg', text, ok ? '#ffb05a' : '#8e97a8');
   const el = $(renderer.xr.isPresenting ? 'heard' : 'heardDesk');
   el.hidden = false; el.textContent = (ok ? 'mic: ' : 'mic ? ') + text; el.style.color = ok ? '' : 'var(--muted)';
@@ -1381,15 +1382,28 @@ async function stopKws() { if (kws.listening) { try { await kws.xfer.stopListeni
 function startVoice() { if (voicePref === 'sr' && SR) startSR(); else startKws(); }
 function stopVoice() { stopKws(); if (SR) stopSR(); }
 // --- training panel (Settings > Voice)
-const vtStatus = t => { $('vtStatus').textContent = t; };
+const vtStatus = t => { $('vtStatus').textContent = t; telemetry('train ' + t); };
 function vtRefresh() { const c = kws.xfer ? kws.xfer.countExamples() : {}; $('vtWords').querySelectorAll('button[data-w]').forEach(b => { b.textContent = (b.dataset.w === '_background_noise_' ? 'noise' : b.dataset.w) + ' (' + (c[b.dataset.w] || 0) + ')'; }); }
 for (const w of [...KWS_WORDS, '_background_noise_']) {
   const b = document.createElement('button'); b.dataset.w = w; b.textContent = w === '_background_noise_' ? 'noise' : w;
-  b.onclick = async () => { try { await kwsInit(vtStatus); vtRefresh(); vtStatus('say "' + (w === '_background_noise_' ? 'nothing (room noise)' : w) + '" now…'); await kws.xfer.collectExample(w, w === '_background_noise_' ? { durationSec: 4 } : undefined); vtRefresh(); vtStatus('recorded ' + w); } catch (e) { vtStatus('error: ' + (e && e.message || e)); } };
+  b.onclick = async () => { try { await kwsInit(vtStatus); vtRefresh(); vtStatus('say "' + (w === '_background_noise_' ? 'nothing (room noise)' : w) + '" now…'); await kws.xfer.collectExample(w, w === '_background_noise_' ? { durationSec: 4 } : undefined); vtRefresh(); vtStatus('recorded ' + w + ' (' + JSON.stringify(kws.xfer.countExamples()) + ')'); } catch (e) { vtStatus('error: ' + (e && e.message || e)); } };
   $('vtWords').appendChild(b);
 }
-$('vtTrain').onclick = async () => { try { await kwsInit(vtStatus); vtRefresh(); await kwsTrain(vtStatus); vtStatus('trained -- Voice now uses your model (saved in this browser)'); } catch (e) { vtStatus('error: ' + (e && e.message || e)); } };
-$('vtSave').onclick = () => { if (!kws.xfer) { vtStatus('nothing recorded yet'); return; } const buf = kws.xfer.serializeExamples(); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf])); a.download = 'examples.bin'; a.click(); vtStatus('examples.bin downloaded (' + Math.round(buf.byteLength / 1024) + ' KB) -> assets/voice/examples.bin'); };
+$('vtTrain').onclick = async () => { try { await kwsInit(vtStatus); vtRefresh(); await kwsTrain(vtStatus); vtStatus('trained -- Voice now uses your model (saved in this browser)'); uploadExamples(kws.xfer.serializeExamples(), 'after train'); } catch (e) { vtStatus('error: ' + (e && e.message || e)); } };
+function uploadExamples(buf, why) {
+  if (!tele.url) return;
+  const u = tele.url.replace(/\/log$/, '/examples');
+  fetch(u, { method: 'POST', body: buf, headers: { 'Content-Type': 'application/octet-stream' } })
+    .then(r => vtStatus('examples sent to the laptop (' + Math.round(buf.byteLength / 1024) + ' KB, ' + why + ') ' + (r.ok || r.status === 204 ? 'ok' : 'HTTP ' + r.status)))
+    .catch(e => vtStatus('examples upload failed: ' + e.message));
+}
+$('vtSave').onclick = () => {
+  if (!kws.xfer) { vtStatus('nothing recorded yet'); return; }
+  const buf = kws.xfer.serializeExamples();
+  uploadExamples(buf, 'save');                                      // reaches the laptop even from a headset
+  try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf])); a.download = 'examples.bin'; a.click(); } catch {}
+  vtStatus('examples.bin (' + Math.round(buf.byteLength / 1024) + ' KB): sent to the laptop + downloaded');
+};
 $('vtClear').onclick = () => { if (kws.xfer) kws.xfer.clearExamples(); kws.trained = false; vtRefresh(); vtStatus('cleared'); };
 function toggleVoice() { voiceOn = !voiceOn; voiceLabel(); if (voiceOn) startVoice(); else stopVoice(); }
 if (new URLSearchParams(location.search).get('autovoice') === '1') setTimeout(toggleVoice, 500);
