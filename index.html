@@ -1016,7 +1016,10 @@ $('ztrk').onclick = () => setFrozen(!frozenAt);
 //      Voice SDK is Unity/Unreal only. The recogniser gets a fixed GRAMMAR of our phrases, so it only ever
 //      chooses between them -- far more reliable than open dictation for six commands.
 // The mic permission is a browser dialog, so switch Voice on BEFORE entering VR/AR; the toggle carries in.
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const SR_API = window.SpeechRecognition || window.webkitSpeechRecognition;
+const isQuest = /OculusBrowser|Quest|Meta Horizon/i.test(navigator.userAgent);
+const voicePref = new URLSearchParams(location.search).get('voice');          // 'sr' | 'vosk' | null
+const SR = (voicePref === 'vosk' || (isQuest && voicePref !== 'sr')) ? null : SR_API;
 const VOSK_JS = 'https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js';
 const VOSK_MODEL = 'assets/vosk/vosk-model-small-en-us-0.15.tar.gz';
 let rec = null, voiceOn = false, voiceRestart = 0;
@@ -1031,6 +1034,7 @@ const VOICE = [
 ];
 const GRAMMAR = ['align', 'zoom in', 'zoom out', 'closer', 'wider', 'return', 'reset', 'freeze', 'live', '[unk]'];
 function heard(text, ok) {
+  console.log('[voice]', ok ? 'ok' : '??', text);
   const el = $(renderer.xr.isPresenting ? 'heard' : 'heardDesk');
   el.hidden = false; el.textContent = (ok ? 'mic: ' : 'mic ? ') + text; el.style.color = ok ? '' : 'var(--muted)';
   clearTimeout(heard.t); heard.t = setTimeout(() => { el.hidden = true; }, 2500);
@@ -1057,8 +1061,10 @@ async function startVosk() {
     if (!vosk.model) {
       voiceLabel('Loading…'); heard('loading the voice model (40 MB, once)', true);
       await loadScript(VOSK_JS);
+      heard('vosk library loaded; fetching model…', true);
       vosk.model = await Vosk.createModel(VOSK_MODEL);
-      vosk.model.on('error', m => notice('Voice model error: ' + m.error));
+      vosk.model.on('error', m => { console.error('[voice] model', m); notice('Voice model error: ' + m.error); });
+      heard('model ready', true);
     }
     if (!voiceOn) return;                                            // toggled off while the model was loading
     vosk.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }, video: false });
@@ -1069,9 +1075,10 @@ async function startVosk() {
     vosk.rec.on('error', m => notice('Voice error: ' + m.error));
     vosk.src = vosk.ctx.createMediaStreamSource(vosk.stream);
     vosk.node = vosk.ctx.createScriptProcessor(4096, 1, 1);
-    vosk.node.onaudioprocess = ev => { try { vosk.rec.acceptWaveformFloat(ev.inputBuffer.getChannelData(0), vosk.ctx.sampleRate); } catch {} };
     vosk.src.connect(vosk.node); vosk.node.connect(vosk.ctx.destination);   // the processor only runs while connected; it outputs silence
-    voiceLabel(); heard('listening (offline)', true);
+    vosk.rec.on('partialresult', m => { const t = (m.result && m.result.partial || '').trim(); if (t && t !== '[unk]') { const el = $(renderer.xr.isPresenting ? 'heard' : 'heardDesk'); el.hidden = false; el.textContent = 'mic … ' + t; } });
+    vosk.frames = 0; vosk.node.onaudioprocess = ev => { const d = ev.inputBuffer.getChannelData(0); if (++vosk.frames === 12) { let pk = 0; for (let i = 0; i < d.length; i++) pk = Math.max(pk, Math.abs(d[i])); heard(pk > 0.002 ? 'mic live (level ' + pk.toFixed(3) + ')' : 'mic silent -- is it muted?', pk > 0.002); } try { vosk.rec.acceptWaveformFloat(d, vosk.ctx.sampleRate); } catch (e) { console.error('[voice] accept', e); } };
+    voiceLabel(); heard('listening (offline, ' + vosk.ctx.sampleRate + ' Hz)', true);
   } catch (e) {
     voiceOn = false; voiceLabel();
     notice((e && e.name === 'NotAllowedError') ? 'Microphone blocked for this page' : 'Voice unavailable: ' + (e && e.message || e));
@@ -1088,6 +1095,7 @@ function stopVosk() {
 function startVoice() { if (SR) startSR(); else startVosk(); }
 function stopVoice() { if (SR) stopSR(); else stopVosk(); }
 function toggleVoice() { voiceOn = !voiceOn; voiceLabel(); if (voiceOn) startVoice(); else stopVoice(); }
+if (new URLSearchParams(location.search).get('autovoice') === '1') setTimeout(toggleVoice, 500);
 $('voice').onclick = toggleVoice; $('hudVoice').onclick = toggleVoice;
 for (const id of ['voice', 'hudVoice']) $(id).title = SR ? 'Voice commands (browser speech recognition)' : 'Voice commands (offline Vosk; first use downloads a 40 MB model)';
 addEventListener('keydown', e => { if (e.key === 'v' && !e.ctrlKey && !e.metaKey && e.target.tagName !== 'INPUT') toggleVoice(); });
