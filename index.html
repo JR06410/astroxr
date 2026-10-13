@@ -865,9 +865,14 @@ function alignHere(why) {
 function pollControllers(tms) {
   const session = renderer.xr.getSession(); if (!session) return;
   let aDown = false, bDown = false, stickY = 0;
+  // diagnostics in the strip: what the browser hands us, and which button index is down
+  const sig = Array.from(session.inputSources).map(src => (src.handedness || '?') + ':' + (src.gamepad ? src.gamepad.buttons.length + 'b/' + src.gamepad.axes.length + 'a' : 'no-pad') + (src.profiles && src.profiles[0] ? ' ' + src.profiles[0] : '')).join('  ');
+  if (sig !== pollControllers.sig) { pollControllers.sig = sig; heard('controllers: ' + (sig || 'none'), true); }
   for (const src of session.inputSources) {
     const gp = src.gamepad; if (!gp) continue;                      // hands have no gamepad: they use the HUD button / voice
     const b = gp.buttons;
+    const down = b.map((x, i) => x.pressed ? i : -1).filter(i => i >= 0);
+    if (down.length && tms - (pollControllers.lastLog || 0) > 400) { pollControllers.lastLog = tms; heard((src.handedness || '?') + ' pressed ' + down.join(',') + (gp.axes.length >= 4 ? '  stick ' + gp.axes[2].toFixed(1) + ',' + gp.axes[3].toFixed(1) : ''), true); }
     if (b[4] && b[4].pressed) aDown = true;                          // xr-standard: 4 = A / X, 5 = B / Y
     if (b[5] && b[5].pressed) bDown = true;
     if (src.handedness === 'right' && gp.axes.length >= 4) stickY = gp.axes[3];
