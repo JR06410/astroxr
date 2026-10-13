@@ -101,12 +101,12 @@ solves on the mount with plate solving and AstroXR will solve on the headset wit
 **Voice** (top bar, headset HUD, or `V`) listens for *align*, *zoom in* / *closer*, *zoom out* / *wider*,
 *return* / *reset*, *freeze* / *live*, and shows what it heard for a moment. Switch it on **before** entering
 VR/AR: the microphone permission is a browser dialog, hidden once the session starts; the toggle carries in.
-Two back ends behind one button: the Web Speech API where the browser has it (desktop Chrome/Edge/Safari), and
-**Vosk offline** where it does not. The Quest Browser has no Web Speech API (Meta's forum, 2024; the Voice SDK is
-Unity/Unreal only), so there the first use downloads the 40 MB small English model from `assets/vosk/` (cached
-afterwards) and recognises in a worker against a fixed grammar of the commands, which is far more reliable than
-open dictation for six phrases. The model is `vosk-model-small-en-us-0.15` repacked as a gzipped tar with a single
-`model/` folder, the layout vosk-browser expects.
+The recogniser is a **keyword spotter** (TensorFlow.js Speech Commands, ~7 MB, ~2 s to start) with a head
+transfer-learned on the owner's voice: **Settings > Voice** records each word about ten times plus room noise,
+trains in the page (saved in the browser), and **Save examples** exports `examples.bin` for `assets/voice/` so
+every device trains itself from it in seconds. Until a model exists, desktop browsers use the Web Speech API;
+the Quest Browser defines that API but never delivers a result, so there the keyword spotter is the only route.
+(Vosk was tried and removed: 40 MB and a slow Kaldi start on the headset.)
 
 ## Phones (no WebXR)
 

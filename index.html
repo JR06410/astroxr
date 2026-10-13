@@ -1045,20 +1045,16 @@ $('ztrk').onclick = () => setFrozen(!frozenAt);
 // ---------------------------------------------------------------- voice commands
 // Hands-free in the headset: "align", "zoom in" / "closer", "zoom out" / "wider", "return" / "reset",
 // "freeze" / "live". Two back ends behind one toggle:
-//   1. Web Speech API (desktop Chrome/Edge/Safari): continuous recognition, restarted while on.
-//   2. Vosk, offline, in a worker (vosk-browser 0.0.8 + the 40 MB small English model from assets/vosk,
-//      downloaded once and cached): the Quest Browser has NO Web Speech API (Meta forum, 2024), and the
-//      Voice SDK is Unity/Unreal only. The recogniser gets a fixed GRAMMAR of our phrases, so it only ever
-//      chooses between them -- far more reliable than open dictation for six commands.
+//   1. Keyword spotter: TensorFlow.js Speech Commands with a transfer-learned head for OUR words, trained on
+//      the owner's voice (Settings > Voice; assets/voice/examples.bin). ~7 MB, ~2 s to start. Preferred.
+//   2. Web Speech API (desktop Chrome/Edge/Safari) until a model exists. The Quest Browser defines the API but
+//      never delivers a result, so there the only route is the keyword spotter.
 // The mic permission is a browser dialog, so switch Voice on BEFORE entering VR/AR; the toggle carries in.
 const SR_API = window.SpeechRecognition || window.webkitSpeechRecognition;
 const isQuest = /OculusBrowser|Quest|Meta Horizon/i.test(navigator.userAgent);
-const voicePref = new URLSearchParams(location.search).get('voice');          // 'sr' | 'vosk' | null
-const SR = (voicePref === 'vosk' || (isQuest && voicePref !== 'sr')) ? null : SR_API;
-const VOSK_JS = 'https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js';
-const VOSK_MODEL = 'assets/vosk/vosk-model-small-en-us-0.15.tar.gz';
+const voicePref = new URLSearchParams(location.search).get('voice');          // 'sr' | null
+const SR = (isQuest && voicePref !== 'sr') ? null : SR_API;     // the Quest defines the API but it never answers
 let rec = null, voiceOn = false, voiceRestart = 0;
-let vosk = { model: null, rec: null, ctx: null, node: null, stream: null, src: null };
 const VOICE = [
   [/\b(align|aligned|a line|online)\b/, 'align', () => alignOn(POLARIS)],
   [/\b(zoom in|zoomin|closer|magnify|bigger)\b/, 'zoom in', () => zoom(1 / 1.6)],
@@ -1089,44 +1085,6 @@ function startSR() {
   try { rec.start(); } catch (e) { notice('Speech recognition failed: ' + e.message); voiceOn = false; voiceLabel(); }
 }
 function stopSR() { clearTimeout(voiceRestart); if (rec) { rec.onend = null; try { rec.stop(); } catch {} rec = null; } }
-// --- back end 2: Vosk in a worker, mic through an AudioContext
-function loadScript(src) { return new Promise((res, rej) => { if (document.querySelector(`script[src="${src}"]`)) return res(); const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = () => rej(new Error('could not load ' + src)); document.head.appendChild(el); }); }
-async function startVosk() {
-  try {
-    if (!vosk.model) {
-      voiceLabel('Loading…'); heard('loading the voice model (40 MB, once)', true);
-      await loadScript(VOSK_JS);
-      heard('vosk library loaded; fetching model…', true);
-      vosk.model = await Vosk.createModel(VOSK_MODEL);
-      vosk.model.on('error', m => { console.error('[voice] model', m); notice('Voice model error: ' + m.error); });
-      heard('model ready', true);
-    }
-    if (!voiceOn) return;                                            // toggled off while the model was loading
-    vosk.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }, video: false });
-    vosk.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if (vosk.ctx.state === 'suspended') await vosk.ctx.resume();
-    vosk.rec = new vosk.model.KaldiRecognizer(vosk.ctx.sampleRate, JSON.stringify(GRAMMAR));
-    vosk.rec.on('result', m => { const t = (m.result && m.result.text || '').trim(); if (t && t !== '[unk]') handleTranscripts([t]); });
-    vosk.rec.on('error', m => notice('Voice error: ' + m.error));
-    vosk.src = vosk.ctx.createMediaStreamSource(vosk.stream);
-    vosk.node = vosk.ctx.createScriptProcessor(4096, 1, 1);
-    vosk.src.connect(vosk.node); vosk.node.connect(vosk.ctx.destination);   // the processor only runs while connected; it outputs silence
-    vosk.rec.on('partialresult', m => { const t = (m.result && m.result.partial || '').trim(); if (t && t !== '[unk]') { const el = $(renderer.xr.isPresenting ? 'heard' : 'heardDesk'); el.hidden = false; el.textContent = 'mic … ' + t; } });
-    vosk.frames = 0; vosk.node.onaudioprocess = ev => { const d = ev.inputBuffer.getChannelData(0); if (++vosk.frames === 12) { let pk = 0; for (let i = 0; i < d.length; i++) pk = Math.max(pk, Math.abs(d[i])); heard(pk > 0.002 ? 'mic live (level ' + pk.toFixed(3) + ')' : 'mic silent -- is it muted?', pk > 0.002); } try { vosk.rec.acceptWaveformFloat(d, vosk.ctx.sampleRate); } catch (e) { console.error('[voice] accept', e); } };
-    voiceLabel(); heard('listening (offline, ' + vosk.ctx.sampleRate + ' Hz)', true);
-  } catch (e) {
-    voiceOn = false; voiceLabel();
-    notice((e && e.name === 'NotAllowedError') ? 'Microphone blocked for this page' : 'Voice unavailable: ' + (e && e.message || e));
-    stopVosk();
-  }
-}
-function stopVosk() {
-  try { vosk.node && vosk.node.disconnect(); vosk.src && vosk.src.disconnect(); } catch {}
-  try { vosk.rec && vosk.rec.remove(); } catch {}
-  try { vosk.stream && vosk.stream.getTracks().forEach(t => t.stop()); } catch {}
-  try { vosk.ctx && vosk.ctx.close(); } catch {}
-  vosk.node = vosk.src = vosk.rec = vosk.stream = vosk.ctx = null;          // the model stays loaded for the next toggle
-}
 // --- back end 3: keyword spotter. TensorFlow.js Speech Commands (1.5 MB library + 6 MB base model, ~2 s to
 // start, GPU) with a transfer-learned head for OUR six words, trained on the owner's voice from a bundled
 // examples file (assets/voice/examples.bin) or in the Settings > Voice panel. Preferred everywhere once a
@@ -1160,7 +1118,7 @@ async function startKws() {
   try {
     await kwsInit(t => heard(t, true));
     if (!kws.trained) {
-      if (!kws.examples) {                                            // Vosk (40 MB) only when asked for: ?voice=vosk
+      if (!kws.examples) {
         if (SR) { heard('no voice model yet (Settings > Voice to train) -- using browser speech', false); return startSR(); }
         voiceOn = false; voiceLabel(); heard('no voice model yet: record the words in Settings > Voice, then Train', false); return;
       }
@@ -1175,8 +1133,8 @@ async function startKws() {
   } catch (e) { voiceOn = false; voiceLabel(); notice('Voice unavailable: ' + (e && e.message || e)); }
 }
 async function stopKws() { if (kws.listening) { try { await kws.xfer.stopListening(); } catch {} kws.listening = false; } }
-function startVoice() { if (voicePref === 'vosk') startVosk(); else if (voicePref === 'sr' && SR) startSR(); else startKws(); }
-function stopVoice() { stopKws(); if (SR) stopSR(); stopVosk(); }
+function startVoice() { if (voicePref === 'sr' && SR) startSR(); else startKws(); }
+function stopVoice() { stopKws(); if (SR) stopSR(); }
 // --- training panel (Settings > Voice)
 const vtStatus = t => { $('vtStatus').textContent = t; };
 function vtRefresh() { const c = kws.xfer ? kws.xfer.countExamples() : {}; $('vtWords').querySelectorAll('button[data-w]').forEach(b => { b.textContent = (b.dataset.w === '_background_noise_' ? 'noise' : b.dataset.w) + ' (' + (c[b.dataset.w] || 0) + ')'; }); }
@@ -1191,7 +1149,7 @@ $('vtClear').onclick = () => { if (kws.xfer) kws.xfer.clearExamples(); kws.train
 function toggleVoice() { voiceOn = !voiceOn; voiceLabel(); if (voiceOn) startVoice(); else stopVoice(); }
 if (new URLSearchParams(location.search).get('autovoice') === '1') setTimeout(toggleVoice, 500);
 $('voice').onclick = toggleVoice; $('hudVoice').onclick = toggleVoice;
-for (const id of ['voice', 'hudVoice']) $(id).title = SR ? 'Voice commands (browser speech recognition)' : 'Voice commands (offline Vosk; first use downloads a 40 MB model)';
+for (const id of ['voice', 'hudVoice']) $(id).title = SR ? 'Voice commands (browser speech recognition)' : 'Voice commands (keyword spotter trained on your voice; Settings > Voice)';
 addEventListener('keydown', e => { if (e.key === 'v' && !e.ctrlKey && !e.metaKey && e.target.tagName !== 'INPUT') toggleVoice(); });
 addEventListener('wheel', () => { const f = camera.fov < TRACK_FOV; if (f !== !!frozenAt) setFrozen(f); }, { passive: true });
 setCam();
