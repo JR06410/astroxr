@@ -946,6 +946,7 @@ function select() {                              // trigger / pinch / click: PIC
 // and the voice command do the same thing at once.
 const ALIGN_HOLD_MS = 1000;
 let alignHeld = 0, alignDone = false, bWas = false, stickWas = false;
+const stick = { dir: 0, since: 0, lastAt: 0, lastDir: 0 };
 function alignHere(why) {
   alignOn(POLARIS);
   heard((xrMode === 'immersive-vr' ? 'north set here' : 'aligned on Polaris') + (why ? ' (' + why + ')' : ''), true);
@@ -977,9 +978,16 @@ function pollControllers(tms) {
   if (bDown && !bWas) { if (heldObj) release(); else zoomReturn(); }
   bWas = bDown;
   // right stick up / down: one zoom step per push (deadzone, 350 ms repeat)
-  // one zoom step per push: forward = in, back = out; the stick must come back to centre before the next
-  if (Math.abs(stickY) > 0.6) { if (!stickWas) { stickWas = true; zoom(stickY < 0 ? 1 / 1.6 : 1.6); } }
-  else if (Math.abs(stickY) < 0.3) stickWas = false;
+  // One zoom step per deliberate push: forward = in, back = out. The push must be held ~80 ms (a spring-back
+  // overshoot is shorter), the opposite direction is ignored for 300 ms after a step, and the stick must come
+  // back to centre before the next step -- without this a single flick read as in-then-out ("zoom off").
+  const dir = stickY < -0.7 ? -1 : stickY > 0.7 ? 1 : 0;
+  if (dir && !stickWas) {
+    if (stick.dir !== dir) { stick.dir = dir; stick.since = tms; }
+    else if (tms - stick.since > 80 && !(tms - stick.lastAt < 300 && dir === -stick.lastDir)) {
+      stickWas = true; stick.lastAt = tms; stick.lastDir = dir; zoom(dir < 0 ? 1 / 1.6 : 1.6);
+    }
+  } else if (!dir) { stick.dir = 0; if (Math.abs(stickY) < 0.3) stickWas = false; }
 }
 addEventListener('pointerup', e => { if (phoneMode && drag && !drag[4] && e.target === renderer.domElement) select(); });   // phone: tap = grab/release
 for (let i = 0; i < 2; i++) { const c = renderer.xr.getController(i); c.addEventListener('selectstart', select); scene.add(c); }
