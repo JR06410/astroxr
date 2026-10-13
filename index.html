@@ -335,7 +335,11 @@ const TYPE_LABEL = { G: 'Galaxy', GPair: 'Galaxy pair', GTrpl: 'Galaxy triplet',
 // and the guide text are drawn larger, and every plate / cut-out / tile gets more gain and a stronger
 // stretch (lower exponent lifts the faint outer nebulosity): more in AR, where passthrough competes,
 // a little less in VR. Desktop and phone are untouched.
-const XR = { labelScale: 1.6, boostAR: 1.7, boostVR: 1.6, stretch: 0.72, stretchDesk: 0.85 };
+const XR = { labelScale: 2.3, cardScale: 0.1, boostAR: 1.7, boostVR: 1.6, stretch: 0.72, stretchDesk: 0.85,
+  // The headset's field is fixed at ~90 deg, which the tile picker read as "wide view" and answered with the
+  // coarsest sky (order 2, ~100"/px) -- soft nebulae. The Quest 3 shows ~19 px/deg, so order 4 (26"/px) around
+  // the gaze is what reads as sharp; order 3 backs it, order 2 covers the rest. Cones are set for head turns.
+  hipsOrderFov: 10, hipsConeFov: 40 };
 let xrMode = null;                                             // 'immersive-ar' | 'immersive-vr' | null
 const xrBoost = () => (!renderer.xr.isPresenting ? 1 : xrMode === 'immersive-ar' ? XR.boostAR : XR.boostVR);
 const gainVal = () => +$('gain').value * xrBoost();
@@ -487,8 +491,9 @@ function updateHips(fwd, now) {
   if (!HIPS.enabled) return;
   skyInv.setFromMatrix4(sky.matrixWorld).invert();                     // gaze in the sky's own (equatorial) frame
   const g = fwd.clone().applyMatrix3(skyInv).normalize();
-  const fov = renderer.xr.isPresenting ? 90 : camera.fov;
-  HIPS.maxOrder = Math.max(2, Math.min(8, Math.round(Math.log2(58.6 / Math.max(0.12, fov / 3)))));
+  const fov = renderer.xr.isPresenting ? XR.hipsConeFov : camera.fov;
+  const fovOrd = renderer.xr.isPresenting ? XR.hipsOrderFov : camera.fov;
+  HIPS.maxOrder = Math.max(2, Math.min(8, Math.round(Math.log2(58.6 / Math.max(0.12, fovOrd / 3)))));
   // Only three levels are ever active: the order the view justifies, one below it as backing while tiles arrive,
   // and order 2 for the rest of the sky. The intermediate orders are skipped entirely -- at a 1 degree field there
   // is nothing to gain from a sheet of order-5 tiles under the order-8 ones.
@@ -686,7 +691,7 @@ $('resetYaw').onclick = () => { yaw = 0; aligned = null; store('yaw', 0); store(
 const held = new THREE.Group(); camera.add(held); held.visible = false;
 let heldObj = null;
 function hold(o) {
-  loadTex(o); held.clear(); heldObj = o;
+  loadTex(o); held.clear(); heldObj = o; heldZoom = 1; held.scale.set(1, 1, 1);
   // The opened view is a framed photograph on an opaque backing: a tight survey cut-out from hips2fits at full
   // resolution — PanSTARRS DR1 for small objects (DSS2 clips their cores), DSS2 colour for the wide fields.
   const D = 1.2, span = 26 * DEG;
@@ -705,7 +710,7 @@ function hold(o) {
   q.scale.setScalar(Math.min(4, o.field[0] / 60 / fovDeg));          // bundled cut-out stands in until the real image arrives
   const recard = src => { if (heldObj !== o) return; held.remove(card);
     held.add(card = label([o.name, `${o.des}  ·  ${o.dims}`, `${fovDeg.toFixed(2)}° field · ${src} · magnified ×${mag.toFixed(0)}`], '#e8ecf4', 0.9, 56));
-    card.scale.multiplyScalar(0.065); card.position.set(0, -h / 2 - 0.06, -D); };
+    card.scale.multiplyScalar(renderer.xr.isPresenting ? XR.cardScale : 0.065); card.position.set(0, -h / 2 - 0.06, -D); };
   const useHi = () => { mat.map = o.hiTex; mat.needsUpdate = true; q.scale.setScalar(1); recard((o.survey || ['', 'DSS2 colour'])[1]); };
   let card;
   if (o.hiTex) useHi();
@@ -753,7 +758,7 @@ function hold(o) {
     l.position.set(0, 0.12, -D + 0.002); held.add(l);
   }
   card = label([o.name, `${o.des}  ·  ${o.dims}`, `${(fovDeg).toFixed(2)}° field · magnified ×${mag.toFixed(0)}`], '#e8ecf4', 0.9, 56);
-  card.scale.multiplyScalar(0.065); card.position.set(0, -h / 2 - 0.06, -D); held.add(card);
+  card.scale.multiplyScalar(renderer.xr.isPresenting ? XR.cardScale : 0.065); card.position.set(0, -h / 2 - 0.06, -D); held.add(card);
   held.visible = true; reticle.visible = false; o.quad.visible = false; labels.visible = false; guide.visible = false; hiRing.visible = false; frame.visible = false;
   document.querySelectorAll('#strip button').forEach(b => b.classList.toggle('active', b.dataset.des === o.des));
   dimSky(true);
@@ -814,7 +819,13 @@ function clearSelection() { if (target) { showSelected(target, false); target = 
 function select() {                              // trigger / pinch / click: grab what you're looking at, else align
   if (heldObj) return release();
   const o = objectInView();
-  if (o) hold(o); else if (renderer.xr.isPresenting) alignOn(POLARIS);
+  if (o) { hold(o); return; }
+  if (!renderer.xr.isPresenting) return;
+  // Align only when it is plainly meant: never aligned yet, or the reticle is on (within 12 deg of) the computed
+  // Polaris. Any other empty-sky trigger just clears the selection -- it used to re-align every single time.
+  const pol = targetObj(POLARIS);
+  const nearPolaris = !!pol && pol.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize().dot(fwdOf()) > Math.cos(12 * DEG);
+  if (!aligned || nearPolaris) alignOn(POLARIS); else { clearSelection(); heard('trigger on empty sky: say "align" or look at Polaris to re-align', false); }
 }
 addEventListener('pointerup', e => { if (phoneMode && drag && !drag[4] && e.target === renderer.domElement) select(); });   // phone: tap = grab/release
 for (let i = 0; i < 2; i++) { const c = renderer.xr.getController(i); c.addEventListener('selectstart', select); scene.add(c); }
@@ -966,8 +977,16 @@ function prefetch() {
   updateHips(fwdOf(), performance.now());
   HIPS.maxInflight = was;
 }
+let heldZoom = 1;                                                   // headset: magnification of the opened photograph
 function zoom(k) {
-  if (renderer.xr.isPresenting) return;
+  if (renderer.xr.isPresenting) {
+    // No camera field to change in a headset. Zoom in opens the selected object as the full-resolution
+    // photograph, then magnifies it (x, y only: scaling z would just move it away at the same size).
+    if (!heldObj) { if (k < 1 && target) hold(target); return; }
+    heldZoom = Math.min(4, Math.max(1, heldZoom / k));
+    held.scale.set(heldZoom, heldZoom, 1);
+    return;
+  }
   const was = camera.fov; setFov(camera.fov * k);
   prefetch();
   if (was >= TRACK_FOV && camera.fov < TRACK_FOV) setFrozen(true);
