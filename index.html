@@ -654,24 +654,44 @@ const observer = () => new A.Observer(lat, lon, 50);
 let frozenAt = null;
 const nowT = () => new Date((frozenAt || Date.now()) + toff * 3600e3);
 const horToWorld = v => new THREE.Vector3(-v.y, v.z, -v.x);      // astronomy-engine HOR: x north, y west, z zenith
-function updateSky() {
-  const t = A.MakeTime(nowT()), obs = observer();
+// The sky update is split into steps so a headset can spread them over consecutive frames (one step per
+// frame: rotation, Moon+Sun, planets, labels+HUD). Done in one frame it cost more than a frame budget at 72 Hz
+// and showed as a jolt once a second. Desktop runs all steps at once, as before.
+function skyRotate(t, obs) {
   const rot = A.Rotation_EQJ_HOR(t, obs);
   const col = v => horToWorld(A.RotateVector(rot, new A.Vector(v[0], v[1], v[2], t)));
   sky.matrix.makeRotationY(yaw * DEG).multiply(new THREE.Matrix4().makeBasis(col([1, 0, 0]), col([0, 1, 0]), col([0, 0, 1])));
   sky.matrix.setPosition(eyeOf()); sky.updateMatrixWorld(true);
-  for (const name of Object.keys(BODY)) {
+}
+function skyBodies(names, t, obs) {
+  for (const name of names) {
     const eq = A.Equator(A.Body[name], t, obs, false, true);          // J2000 topocentric
     placeOnSky(BODY[name], eq.ra * 15, eq.dec);
     const eqd = A.Equator(A.Body[name], t, obs, true, true);
     bodyHor[name] = A.Horizon(t, obs, eqd.ra, eqd.dec, 'normal');
   }
   BODY.Sun.visible = bodyHor.Sun.altitude > -2;
-  for (const p of PLANETS) BODY[p].visible = $('planets').checked && bodyHor[p].altitude > -2;
+  for (const p of PLANETS) if (bodyHor[p]) BODY[p].visible = $('planets').checked && bodyHor[p].altitude > -2;
+}
+function skyFinish() {
   placeLabels();
   $('clock').textContent = `${nowT().toUTCString().slice(5, 25)} UTC${frozenAt ? '  (frozen)' : ''}`;
   if (!renderer.xr.isPresenting) updateStrip();                     // the strip is hidden in a session; rebuilding it cost a frame
   updateAlignState();
+}
+const SUN_MOON = ['Moon', 'Sun'];
+function updateSky() {                                               // desktop / immediate: everything now
+  const t = A.MakeTime(nowT()), obs = observer();
+  skyRotate(t, obs); skyBodies(Object.keys(BODY), t, obs); skyFinish();
+}
+let skyPhase = 0, skyT = null, skyObs = null;
+function updateSkyStaggered() {                                      // headset: one step per frame, four frames
+  if (skyPhase === 0) { skyT = A.MakeTime(nowT()); skyObs = observer(); skyRotate(skyT, skyObs); }
+  else if (skyPhase === 1) skyBodies(SUN_MOON, skyT, skyObs);
+  else if (skyPhase === 2) skyBodies(PLANETS, skyT, skyObs);
+  else { skyFinish(); skyPhase = -1; }
+  skyPhase++;
+  return skyPhase === 0;                                              // true when the sequence completed
 }
 function altOf(obj) { const p = obj.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize(); return Math.asin(p.y) / DEG; }
 
@@ -1307,7 +1327,10 @@ addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; cam
 let last = 0, lastL = 0;
 updateSky();
 renderer.setAnimationLoop(tms => {
-  if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
+  if (renderer.xr.isPresenting) {
+    if (skyPhase > 0 || tms - last > 1000) { if (updateSkyStaggered()) last = tms; }   // mid-sequence: keep stepping
+    else if (tms - lastL > 500) { placeLabels(); lastL = tms; }
+  } else if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
   if (renderer.xr.isPresenting) {
     pollControllers(tms); hudWorld.visible = true;
     if (hw.msg && tms > hw.msgUntil) hwSet('msg', '');
