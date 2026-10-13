@@ -136,6 +136,13 @@
       <label><input id="hips" type="checkbox" checked> streamed DSS2 sky</label>
     </div>
     <div class="row"><span class="hint" id="xrhint">Checking WebXR…</span></div>
+  </section>
+  <section>
+    <h2>Voice</h2>
+    <div class="row"><span class="hint">Teach the keyword spotter your voice: click a word and say it straight away (1 s), about ten times each, record a few seconds of room noise, then <b>Train</b>. <b>Save examples</b> downloads <code>examples.bin</code>; put it in <code>assets/voice/</code> and every device loads it.</span></div>
+    <div class="row" id="vtWords"></div>
+    <div class="row"><button id="vtTrain" class="primary">Train</button><button id="vtSave">Save examples</button><button id="vtClear" class="quiet">Clear</button></div>
+    <div class="row"><span class="hint" id="vtStatus"></span></div>
     <div class="row"><span class="hint">Pick an object in the strip or click one; the arrow guides you. Drag to look · + / − or wheel to zoom (the sky resolves deeper as you go) · Return for the wide view · click an object to zoom to it · past 15° the sky freezes so nothing drifts (F toggles) · A = align</span></div>
   </section>
 </div>
@@ -1120,8 +1127,64 @@ function stopVosk() {
   try { vosk.ctx && vosk.ctx.close(); } catch {}
   vosk.node = vosk.src = vosk.rec = vosk.stream = vosk.ctx = null;          // the model stays loaded for the next toggle
 }
-function startVoice() { if (SR) startSR(); else startVosk(); }
-function stopVoice() { if (SR) stopSR(); else stopVosk(); }
+// --- back end 3: keyword spotter. TensorFlow.js Speech Commands (1.5 MB library + 6 MB base model, ~2 s to
+// start, GPU) with a transfer-learned head for OUR six words, trained on the owner's voice from a bundled
+// examples file (assets/voice/examples.bin) or in the Settings > Voice panel. Preferred everywhere once a
+// model exists; Vosk (Quest) / Web Speech (desktop) remain the fallbacks until then.
+const KWS_WORDS = ['align', 'zoom in', 'zoom out', 'return', 'freeze', 'live'];
+const KWS_EXAMPLES = 'assets/voice/examples.bin';
+const TF_JS = 'https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.22.0/tf.min.js';
+const SC_JS = 'https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.5.4/dist/speech-commands.min.js';
+const kws = { base: null, xfer: null, trained: false, listening: false, examples: 0 };
+async function kwsInit(status) {
+  if (kws.xfer) return;
+  status('loading speech library…'); await loadScript(TF_JS); await loadScript(SC_JS);
+  status('loading base model (6 MB, once)…');
+  kws.base = speechCommands.create('BROWSER_FFT'); await kws.base.ensureModelLoaded();
+  kws.xfer = kws.base.createTransfer('astroxr');
+  let len = 0;
+  try { const r = await fetch(KWS_EXAMPLES); if (r.ok) { const buf = await r.arrayBuffer(); len = buf.byteLength; kws.xfer.loadExamples(buf, true); kws.examples = len; } } catch {}
+  // a head trained earlier in this browser is reused only if it came from the same examples file
+  if (len && store('kwsLen') === len) { try { await kws.xfer.load('indexeddb://astroxr-voice'); kws.trained = true; } catch {} }
+}
+async function kwsTrain(status) {
+  const counts = kws.xfer.countExamples(); const n = Object.values(counts).reduce((a, b) => a + b, 0);
+  const words = Object.keys(counts).filter(w => !w.startsWith('_'));
+  if (words.length < 2 || n < 10) throw new Error('need examples of at least two words (have ' + n + ')');
+  status('training on ' + n + ' examples…');
+  await kws.xfer.train({ epochs: 30, callback: { onEpochEnd: (e, l) => status(`training ${e + 1}/30  loss ${l.loss.toFixed(3)}  acc ${((l.acc || 0) * 100).toFixed(0)}%`) } });
+  kws.trained = true;
+  try { await kws.xfer.save('indexeddb://astroxr-voice'); store('kwsLen', kws.examples); } catch {}
+}
+async function startKws() {
+  try {
+    await kwsInit(t => heard(t, true));
+    if (!kws.trained) {
+      if (!kws.examples) { heard('no voice model yet (Settings > Voice to train) -- using the fallback', false); return SR ? startSR() : startVosk(); }
+      await kwsTrain(t => heard(t, true));
+    }
+    const labels = kws.xfer.wordLabels();
+    await kws.xfer.listen(r => {
+      let bi = 0; for (let i = 1; i < r.scores.length; i++) if (r.scores[i] > r.scores[bi]) bi = i;
+      const w = labels[bi]; if (w && !w.startsWith('_') && r.scores[bi] >= 0.8) handleTranscripts([w]);
+    }, { probabilityThreshold: 0.8, overlapFactor: 0.6, invokeCallbackOnNoiseAndUnknown: false });
+    kws.listening = true; voiceLabel(); heard('listening (keyword spotter, your voice)', true);
+  } catch (e) { voiceOn = false; voiceLabel(); notice('Voice unavailable: ' + (e && e.message || e)); }
+}
+async function stopKws() { if (kws.listening) { try { await kws.xfer.stopListening(); } catch {} kws.listening = false; } }
+function startVoice() { if (voicePref === 'vosk') startVosk(); else if (voicePref === 'sr' && SR) startSR(); else startKws(); }
+function stopVoice() { stopKws(); if (SR) stopSR(); stopVosk(); }
+// --- training panel (Settings > Voice)
+const vtStatus = t => { $('vtStatus').textContent = t; };
+function vtRefresh() { const c = kws.xfer ? kws.xfer.countExamples() : {}; $('vtWords').querySelectorAll('button[data-w]').forEach(b => { b.textContent = (b.dataset.w === '_background_noise_' ? 'noise' : b.dataset.w) + ' (' + (c[b.dataset.w] || 0) + ')'; }); }
+for (const w of [...KWS_WORDS, '_background_noise_']) {
+  const b = document.createElement('button'); b.dataset.w = w; b.textContent = w === '_background_noise_' ? 'noise' : w;
+  b.onclick = async () => { try { await kwsInit(vtStatus); vtRefresh(); vtStatus('say "' + (w === '_background_noise_' ? 'nothing (room noise)' : w) + '" now…'); await kws.xfer.collectExample(w, w === '_background_noise_' ? { durationSec: 4 } : undefined); vtRefresh(); vtStatus('recorded ' + w); } catch (e) { vtStatus('error: ' + (e && e.message || e)); } };
+  $('vtWords').appendChild(b);
+}
+$('vtTrain').onclick = async () => { try { await kwsInit(vtStatus); vtRefresh(); await kwsTrain(vtStatus); vtStatus('trained -- Voice now uses your model (saved in this browser)'); } catch (e) { vtStatus('error: ' + (e && e.message || e)); } };
+$('vtSave').onclick = () => { if (!kws.xfer) { vtStatus('nothing recorded yet'); return; } const buf = kws.xfer.serializeExamples(); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf])); a.download = 'examples.bin'; a.click(); vtStatus('examples.bin downloaded (' + Math.round(buf.byteLength / 1024) + ' KB) -> assets/voice/examples.bin'); };
+$('vtClear').onclick = () => { if (kws.xfer) kws.xfer.clearExamples(); kws.trained = false; vtRefresh(); vtStatus('cleared'); };
 function toggleVoice() { voiceOn = !voiceOn; voiceLabel(); if (voiceOn) startVoice(); else stopVoice(); }
 if (new URLSearchParams(location.search).get('autovoice') === '1') setTimeout(toggleVoice, 500);
 $('voice').onclick = toggleVoice; $('hudVoice').onclick = toggleVoice;
