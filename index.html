@@ -272,7 +272,7 @@ function label(lines, color = '#e8ecf4', heightDeg = 0.9, px = 56) {
   const c = document.createElement('canvas'); const g = c.getContext('2d');
   const fontOf = i => (i ? `400 ${Math.round(px * 0.72)}px` : `600 ${px}px`) + ' "IBM Plex Sans", "Segoe UI", sans-serif';
   let wmax = 0; lines.forEach((t, i) => { g.font = fontOf(i); wmax = Math.max(wmax, g.measureText(t).width); });
-  c.width = Math.max(1024, Math.ceil(wmax) + 80); c.height = Math.round(px * 1.7) * lines.length + 16;   // never truncate
+  c.width = Math.max(256, Math.ceil(wmax) + 80); c.height = Math.round(px * 1.7) * lines.length + 16;    // as wide as the text needs, no more
   g.textAlign = 'center';
   lines.forEach((t, i) => { g.font = fontOf(i); g.fillStyle = i ? '#b9c1d0' : color; g.fillText(t, c.width / 2, px * 1.15 + i * px * 1.6); });
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
@@ -633,20 +633,23 @@ function refreshParent(t) {                        // a tile hides once all four
 function loadTile(t, now) {
   t.tex = 'loading'; t.last = now; HIPS.inflight++;
   const url = `${HIPS.base}/Norder${t.layer.order}/Dir${Math.floor(t.ip / 10000) * 10000}/Npix${t.ip}.jpg`;
-  loader.load(url, tex => {
+  loader.load(url, tex => (tex.image && tex.image.decode ? tex.image.decode() : Promise.resolve()).catch(() => {}).then(() => {   // decode off the main thread
     HIPS.inflight--; tex.colorSpace = THREE.SRGBColorSpace; tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter; tex.anisotropy = renderer.capabilities.getMaxAnisotropy();   // no mipmaps = star fields sparkle in the headset
     t.tex = tex; t.mesh = tileMesh(t.layer, t.ip);
-    // only the coarse orders get their own sky level; deeper tiles share a fixed one, otherwise a tile that falls
-    // entirely inside a bright nebula measures the nebula as "sky" and the mosaic shows as bright/dark patches
-    const b = t.layer.order <= 4 ? skyLevel(tex.image) : [0.04, 0.04, 0.04];
-    t.mesh.material.uniforms.black.value.set(b[0], b[1], b[2]);
-    t.bright = brightLevel(tex.image, b);                                 // for the headset's gaze auto-exposure
     t.mesh.material.uniforms.map.value = tex; t.mesh.visible = $('hips').checked; HIPS.loaded.add(t);
-    const enter = () => { if (!t.mesh) return; hipsGroup.add(t.mesh); refreshParent(t); };   // may have been evicted while queued
-    if (renderer.xr.isPresenting) HIPS.pending.push(enter); else enter();   // headset: spread uploads, <= 2 per frame
+    const enter = () => {
+      if (!t.mesh) return;                                              // may have been evicted while queued
+      // only the coarse orders get their own sky level; deeper tiles share a fixed one, otherwise a tile that falls
+      // entirely inside a bright nebula measures the nebula as "sky" and the mosaic shows as bright/dark patches
+      const b = t.layer.order <= 4 ? skyLevel(tex.image) : [0.04, 0.04, 0.04];
+      t.mesh.material.uniforms.black.value.set(b[0], b[1], b[2]);
+      t.bright = brightLevel(tex.image, b);                               // for the headset's gaze auto-exposure
+      hipsGroup.add(t.mesh); refreshParent(t);
+    };
+    if (renderer.xr.isPresenting) HIPS.pending.push(enter); else enter();   // headset: one tile per frame (analysis + upload)
     if (HIPS.loaded.size === 1) setHipsCoverage(true);
     if (location.search.includes('debug')) console.log('hips tile', t.layer.order, t.ip, 'loaded', HIPS.loaded.size);
-  }, undefined, () => {
+  }), undefined, () => {
     HIPS.inflight--; t.tex = null; HIPS.failed++;
     if (HIPS.failed >= 3 && HIPS.loaded.size === 0) { HIPS.enabled = false; $('hips').checked = false; setHipsCoverage(false); $('xrhint').textContent = 'Streamed sky unavailable on this host; using bundled plates.'; }
   });
@@ -1540,7 +1543,7 @@ renderer.setAnimationLoop(tms => {
   } else if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
   if (renderer.xr.isPresenting) {
     pollControllers(tms); hudWorld.visible = true; autoExpose(tms); lazyFollow(tms);
-    for (let i = 0; i < 2 && HIPS.pending.length; i++) HIPS.pending.shift()();   // tile uploads, two per frame
+    if (HIPS.pending.length) HIPS.pending.shift()();                         // one tile per frame: analysis + upload
     if (hw.msg && tms > hw.msgUntil) hwSet('msg', '');
     if (hw.state && tms > hw.stateUntil && !alignHeld) hwSet('state', '');   // the countdown keeps refreshing it
   }
