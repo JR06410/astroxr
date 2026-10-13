@@ -717,7 +717,7 @@ function hwSet(which, text, color) {
   m.position.set(0, which === 'msg' ? -0.30 : -0.40, -1.5); m.renderOrder = 10; m.material.depthTest = false;
   hudWorld.add(m); hw[which] = m;
 }
-function setHudState(text) { setHudState(text); if (renderer.xr.isPresenting) hwSet('state', text, '#b9c1d0'); }
+function setHudState(text) { $('hudState').textContent = text; if (renderer.xr.isPresenting) hwSet('state', text, '#b9c1d0'); }
 // ---------------------------------------------------------------- pull an object closer
 const held = new THREE.Group(); camera.add(held); held.visible = false;
 let heldObj = null;
