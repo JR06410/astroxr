@@ -217,8 +217,9 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 400);
 camera.position.set(0, 1.6, 0);
 const rig = new THREE.Group(); rig.add(camera); scene.add(rig);
-const eyeOf = () => (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera).getWorldPosition(new THREE.Vector3());
-const fwdOf = () => { const f = new THREE.Vector3(); (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera).getWorldDirection(f); return f; };
+const _eyeV = new THREE.Vector3(), _fwdV = new THREE.Vector3();           // scratch: no per-frame allocation
+const eyeOf = () => (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera).getWorldPosition(_eyeV);
+const fwdOf = () => { (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera).getWorldDirection(_fwdV); return _fwdV; };
 
 // Sky group: its local frame IS the J2000 equatorial frame (x -> RA 0, z -> north celestial pole).
 const sky = new THREE.Group(); sky.matrixAutoUpdate = false; scene.add(sky);
@@ -1326,7 +1327,21 @@ $('vr').onclick = () => start('immersive-vr');
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 let last = 0, lastL = 0;
 updateSky();
+const _qFrame = new THREE.Quaternion();
+// ?perf=1 -- frame-time and draw-call readout in the head-locked strip (measure before optimising further)
+const perfOn = new URLSearchParams(location.search).get('perf') === '1';
+const perf = { n: 0, sum: 0, worst: 0, lastT: 0, at: 0 };
 renderer.setAnimationLoop(tms => {
+  if (perfOn) {
+    if (perf.lastT) { const dt = tms - perf.lastT; perf.n++; perf.sum += dt; if (dt > perf.worst) perf.worst = dt; }
+    perf.lastT = tms;
+    if (tms - perf.at > 1000 && perf.n) {
+      const info = renderer.info.render;
+      const txt = `frame avg ${(perf.sum / perf.n).toFixed(1)} ms  worst ${perf.worst.toFixed(1)} ms  draws ${info.calls}  tris ${(info.triangles / 1000).toFixed(0)}k  tiles ${HIPS.loaded.size}`;
+      if (renderer.xr.isPresenting) hwSet('msg', txt, '#ffb05a'); else { $('heardDesk').hidden = false; $('heardDesk').textContent = txt; }
+      perf.at = tms; perf.n = 0; perf.sum = 0; perf.worst = 0;
+    }
+  }
   if (renderer.xr.isPresenting) {
     if (skyPhase > 0 || tms - last > 1000) { if (updateSkyStaggered()) last = tms; }   // mid-sequence: keep stepping
     else if (tms - lastL > 500) { placeLabels(); lastL = tms; }
@@ -1345,7 +1360,7 @@ renderer.setAnimationLoop(tms => {
   else if (!renderer.xr.isPresenting) {                            // the open view keeps its apparent size when the desktop zooms
     const k = camera.fov / 70; held.scale.setScalar(k); held.position.z = -1.2 * (1 - k);
   }
-  const q = (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera).getWorldQuaternion(new THREE.Quaternion());
+  const q = (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera).getWorldQuaternion(_qFrame);
   const kz = renderer.xr.isPresenting ? XR.labelScale : Math.min(1.7, Math.max(0.012, 1.4 * camera.fov / 70));  // constant on-screen size at any zoom; bigger in the headset
   for (const L of LABELS) {                                        // screen-aligned billboards that fade in and out
     const m = L.mesh; m.quaternion.copy(q); m.scale.copy(L.base).multiplyScalar(kz);
