@@ -413,11 +413,11 @@ function autoExpose(now) {
   }
   if (deep) {
     const f = fwdOf().clone(), cosF = Math.cos((LOUPE_DEG / loupe.m / 2 + 1.5) * DEG); let busy = 0;
-    trimHiQuads(f);
+    trimHiQuads(f, cosF);
     for (const o of OBJECTS) if (o.hiLoading) busy++;
     for (const o of OBJECTS) {
       if (busy >= 2) break;
-      if (o.hiTex || o.hiLoading || o.hiFailed || o.size[0] > 16) continue;
+      if (o.hiTex || o.hiLoading || o.hiFailed || o.size[0] > 16 || (o.hiCooldown && now < o.hiCooldown)) continue;
       if (o.quad.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize().dot(f) > cosF) { loadHi(o); busy++; }
     }
   }
@@ -864,16 +864,29 @@ const hw = { state: null, msg: null, msgUntil: 0, stateUntil: 0, stateText: '', 
 const HW_SHOW_MS = 4000;
 function hwSet(which, text, color) {
   if (text && text === hw[which + 'Text']) { hw[which + 'Until'] = performance.now() + HW_SHOW_MS; return; }   // same text: just keep it up
+  if (!text && !hw[which + 'Text']) return;                           // already clear
   const _t0 = performance.now(); try { return hwSetInner(which, text, color); } finally { const dt = performance.now() - _t0; if (dt > tele.tStrip) tele.tStrip = dt; }
 }
+const HW_W = 2048, HW_H = 72;
 function hwSetInner(which, text, color) {
   hw[which + 'Text'] = text || '';
-  if (hw[which]) { hudWorld.remove(hw[which]); hw[which].material.map.dispose(); hw[which].material.dispose(); hw[which] = null; }
-  if (!text) return;
+  if (!text) { if (hw[which]) hw[which].visible = false; return; }
   hw[which + 'Until'] = performance.now() + HW_SHOW_MS;
-  const m = label([text], color, 2.0, 56); m.scale.multiplyScalar(0.03);           // 2 deg high at 1.5 m
-  m.position.set(0, which === 'msg' ? -0.30 : -0.40, -1.5); m.renderOrder = 60; m.material.depthTest = false;
-  hudWorld.add(m); hw[which] = m;
+  let m = hw[which];
+  if (!m) {                                                           // one canvas + texture per line, for the whole session
+    const c = document.createElement('canvas'); c.width = HW_W; c.height = HW_H;
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.generateMipmaps = false; tex.minFilter = THREE.LinearFilter;
+    m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false }));
+    const h = chord(2.0 * DEG) * 0.03;                                 // 2 deg high at 1.5 m
+    m.scale.set(h * HW_W / HW_H, h, 1); m.position.set(0, which === 'msg' ? -0.30 : -0.40, -1.5); m.renderOrder = 60;
+    m.userData.canvas = c; hudWorld.add(m); hw[which] = m;
+  }
+  const c = m.userData.canvas, g = c.getContext('2d');
+  g.clearRect(0, 0, HW_W, HW_H);
+  let px = 48; g.font = `600 ${px}px "IBM Plex Sans", "Segoe UI", sans-serif`;
+  const w = g.measureText(text).width; if (w > HW_W - 60) { px = Math.max(22, Math.floor(px * (HW_W - 60) / w)); g.font = `600 ${px}px "IBM Plex Sans", "Segoe UI", sans-serif`; }
+  g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = color; g.fillText(text, HW_W / 2, HW_H / 2);
+  m.material.map.needsUpdate = true; m.visible = true;
 }
 let hudStateText = null;
 function setHudState(text) {
@@ -978,13 +991,16 @@ function ensureHiQuad(o) {
   if (renderer.xr.isPresenting) heard((o.survey ? o.survey[1] : 'hi-res') + ' for ' + o.name, true);
 }
 function hiQuadsVisible(on) { for (const q of HIQ) q.visible = on; }
-const HIQ_MAX = 6;
-function trimHiQuads(fwd) {                                           // headset: bound the 1600 px patches held in GPU memory
+const HIQ_MAX = 12;
+function trimHiQuads(fwd, cosField) {                                 // headset: bound the 1600 px patches held in GPU memory
   if (HIQ.length <= HIQ_MAX) return;
-  const scored = HIQ.map(q => ({ q, d: q.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize().dot(fwd) })).sort((a, b) => a.d - b.d);
-  for (const { q } of scored.slice(0, HIQ.length - HIQ_MAX)) {
+  const scored = HIQ.map(q => ({ q, d: q.getWorldPosition(_v3).sub(eyeOf()).normalize().dot(fwd) })).sort((a, b) => a.d - b.d);
+  for (const { q, d } of scored) {
+    if (HIQ.length <= HIQ_MAX) break;
+    if (d > cosField) continue;                                       // inside the eyepiece field: never evicted (no thrash)
     const o = OBJECTS.find(x => x.hiQuad === q); if (!o || o === heldObj) continue;
     sky.remove(q); q.geometry.dispose(); q.material.dispose(); if (o.hiTex) { o.hiTex.dispose(); o.hiTex = null; } o.hiQuad = null; o.hiFailed = false;
+    o.hiCooldown = performance.now() + 20000;                         // not refetched for 20 s
     HIQ.splice(HIQ.indexOf(q), 1);
   }
 }
@@ -1620,8 +1636,8 @@ renderer.setAnimationLoop(tms => {
     timed('tPoll', () => pollControllers(tms)); hudWorld.visible = true; timed('tAE', () => autoExpose(tms)); timed('tFollow', () => lazyFollow(tms));
     if (HIPS.pending.length && skyPhase === 0) timed('tEnter', HIPS.pending.shift());   // one tile phase per frame, never with a sky step
     timed('tWarm', () => { for (let i = 0; i < 2 && warmQueue.length; i++) { const t = warmQueue.shift(); try { renderer.initTexture(t); t.__warm = true; } catch {} } });
-    if (hw.msg && tms > hw.msgUntil) hwSet('msg', '');
-    if (hw.state && tms > hw.stateUntil && !alignHeld) hwSet('state', '');   // the countdown keeps refreshing it
+    if (hw.msgText && tms > hw.msgUntil) hwSet('msg', '');
+    if (hw.stateText && tms > hw.stateUntil && !alignHeld) hwSet('state', '');   // the countdown keeps refreshing it
   }
   else if (hudWorld.visible) { hudWorld.visible = false; hwSet('msg', ''); }
   const eye = eyeOf();
