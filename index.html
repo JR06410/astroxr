@@ -1160,7 +1160,10 @@ async function startKws() {
   try {
     await kwsInit(t => heard(t, true));
     if (!kws.trained) {
-      if (!kws.examples) { heard('no voice model yet (Settings > Voice to train) -- using the fallback', false); return SR ? startSR() : startVosk(); }
+      if (!kws.examples) {                                            // Vosk (40 MB) only when asked for: ?voice=vosk
+        if (SR) { heard('no voice model yet (Settings > Voice to train) -- using browser speech', false); return startSR(); }
+        voiceOn = false; voiceLabel(); heard('no voice model yet: record the words in Settings > Voice, then Train', false); return;
+      }
       await kwsTrain(t => heard(t, true));
     }
     const labels = kws.xfer.wordLabels();
