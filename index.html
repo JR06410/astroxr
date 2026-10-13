@@ -324,12 +324,14 @@ function placeLabels() {
   };
   const accepted = [];
   for (const L of LABELS) L.target = 0;
+  const xr = renderer.xr.isPresenting, conCos = Math.cos(XR.conCone * DEG); let shown = 0;
   for (const L of order) {
-    if (L.kind === 'con') { L.p = place(L, 'below'); L.target = 1; continue; }
+    if (xr && shown >= XR.labelCap) break;                           // 125 labels at once cost a frame budget on the Quest
+    if (L.kind === 'con') { if (xr && L.dot < conCos) continue; L.p = place(L, 'below'); L.target = 1; shown++; continue; }
     for (const where of (L.kind === 'star' ? ['below', 'right', 'above'] : ['below', 'above', 'right'])) {
       const pv = place(L, where), b = box(L, pv);
       if (accepted.some(M => collide(M, b))) continue;
-      accepted.push(b); L.p = pv; L.target = 1; L.shownAt = now; break;
+      accepted.push(b); L.p = pv; L.target = 1; L.shownAt = now; shown++; break;
     }
   }
   for (const L of LABELS) if (L.p && (L.target || L.mesh.visible)) L.mesh.position.copy(eye).addScaledVector(L.p, R);
@@ -356,7 +358,8 @@ const XR = { labelScale: 2.3, cardScale: 0.1, boostAR: 1.0, boostVR: 1.0, stretc
   // The headset's field is fixed at ~90 deg, which the tile picker read as "wide view" and answered with the
   // coarsest sky (order 2, ~100"/px) -- soft nebulae. The Quest 3 shows ~19 px/deg, so order 4 (26"/px) around
   // the gaze is what reads as sharp; order 3 backs it, order 2 covers the rest. Cones are set for head turns.
-  hipsOrderFov: 10, hipsConeFov: 60 };      // cone 60: load ~49 deg around the gaze, never drop within the hemisphere
+  hipsOrderFov: 10, hipsConeFov: 60,        // cone 60: load ~49 deg around the gaze, never drop within the hemisphere
+  deepCone: 20, labelCap: 40, conCone: 35 };  // finest order within 20 deg of the gaze only; <= 40 labels; constellation names within 35 deg
 { const xo = +(new URLSearchParams(location.search).get('xorder') || 0);          // ?xorder=3 -> coarser headset sky (A/B for draw-call cost)
   if (xo >= 2 && xo <= 8) XR.hipsOrderFov = 3 * 58.6 / Math.pow(2, xo); }
 let xrMode = null;                                             // 'immersive-ar' | 'immersive-vr' | null
@@ -477,7 +480,7 @@ FEATURED.forEach(loadTex);
 // Needs a host without a restrictive CSP (GitHub Pages); inside the claude.ai artifact the first tile fails and
 // the layer switches itself off, leaving the plates and cut-outs.
 const HIPS = {
-  base: 'https://alasky.cds.unistra.fr/DSS/DSSColor', G: 8, maxInflight: 6, enabled: true, failed: 0, gain: 2.2, loaded: new Set(),
+  base: 'https://alasky.cds.unistra.fr/DSS/DSSColor', G: 8, maxInflight: 6, pending: [], enabled: true, failed: 0, gain: 2.2, loaded: new Set(),
   // two layers: order 2 (192 tiles, 14.6 deg, 1.7'/px) covers the whole sky quickly and is kept; order 3 refines
   // around the gaze and is dropped again far behind it. A coarse tile hides once its four children are in.
   // Orders 2..8 of the same pyramid (a tile spans 58.6/2^order degrees, 512 px, so order 2 is 103"/px and
@@ -564,8 +567,9 @@ function updateHips(fwd, now) {
     // load only what is near the view: a cone that follows the field of view rather than a fixed per-layer radius,
     // which at a 0.3 degree field was fetching fifty times more sky than could be seen
     const tileDeg = 58.6 / (1 << layer.order);
-    const load = layer.order === 2 ? -1 : Math.cos(Math.min(75, fov * 0.75 + tileDeg) * DEG);
-    const drop = layer.order === 2 ? -1 : Math.cos(Math.min(90, fov * 1.6 + tileDeg * 2) * DEG);
+    const deepXR = renderer.xr.isPresenting && !zoomed && layer.order === HIPS.maxOrder;   // finest level: gaze cone only
+    const load = layer.order === 2 ? -1 : Math.cos(Math.min(75, (deepXR ? XR.deepCone : fov * 0.75) + tileDeg) * DEG);
+    const drop = layer.order === 2 ? -1 : Math.cos(Math.min(90, (deepXR ? XR.deepCone * 2.2 : fov * 1.6) + tileDeg * 2) * DEG);
     const scan = layer.order <= 3 ? layer.tiles : null;
     const visit = t => {
       const d = t.centre.dot(g);
@@ -618,8 +622,9 @@ function loadTile(t, now) {
     const b = t.layer.order <= 4 ? skyLevel(tex.image) : [0.04, 0.04, 0.04];
     t.mesh.material.uniforms.black.value.set(b[0], b[1], b[2]);
     t.bright = brightLevel(tex.image, b);                                 // for the headset's gaze auto-exposure
-    t.mesh.material.uniforms.map.value = tex; t.mesh.visible = $('hips').checked; hipsGroup.add(t.mesh); HIPS.loaded.add(t);
-    refreshParent(t);
+    t.mesh.material.uniforms.map.value = tex; t.mesh.visible = $('hips').checked; HIPS.loaded.add(t);
+    const enter = () => { hipsGroup.add(t.mesh); refreshParent(t); };
+    if (renderer.xr.isPresenting) HIPS.pending.push(enter); else enter();   // headset: spread uploads, <= 2 per frame
     if (HIPS.loaded.size === 1) setHipsCoverage(true);
     if (location.search.includes('debug')) console.log('hips tile', t.layer.order, t.ip, 'loaded', HIPS.loaded.size);
   }, undefined, () => {
@@ -1450,7 +1455,7 @@ async function start(mode) {
   renderer.xr.setFramebufferScaleFactor(+(qsx.get('fb') || 1.0));     // 1.25 cost frames on the Quest 3 (text ghosting = below 72 Hz)
   try {
     const session = await navigator.xr.requestSession(mode, init);
-    session.addEventListener('end', () => { xrMode = null; hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); applyGain(); });
+    session.addEventListener('end', () => { xrMode = null; while (HIPS.pending.length) HIPS.pending.shift()(); hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); applyGain(); });
     await renderer.xr.setSession(session);
     try { renderer.xr.setFoveation(+(qsx.get('fov') || 0.5)); } catch {}
     perf.sessionAt = performance.now();
@@ -1515,6 +1520,7 @@ renderer.setAnimationLoop(tms => {
   } else if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
   if (renderer.xr.isPresenting) {
     pollControllers(tms); hudWorld.visible = true; autoExpose(tms); lazyFollow(tms);
+    for (let i = 0; i < 2 && HIPS.pending.length; i++) HIPS.pending.shift()();   // tile uploads, two per frame
     if (hw.msg && tms > hw.msgUntil) hwSet('msg', '');
     if (hw.state && tms > hw.stateUntil && !alignHeld) hwSet('state', '');   // the countdown keeps refreshing it
   }
