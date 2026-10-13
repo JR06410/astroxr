@@ -190,7 +190,8 @@ const chord = a => 2 * R * Math.tan(a / 2);     // metres spanned by an angle at
 
 // ---------------------------------------------------------------- state
 const store = (k, v) => { try { if (v !== undefined) localStorage.setItem(k, JSON.stringify(v)); return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
-let lat = store('lat') ?? 51.5, lon = store('lon') ?? -0.12, yaw = store('yaw') ?? 0, toff = 0;
+let lat = store('lat') ?? 50.713, lon = store('lon') ?? -1.927, yaw = store('yaw') ?? 0, toff = 0;   // default: the observing site (Bournemouth)
+const siteStored = store('lat') != null;
 let aligned = store('aligned');                 // { on: 'Moon', at: epoch ms } or null
 const $ = id => document.getElementById(id);
 $('lat').value = lat; $('lon').value = lon;
@@ -335,7 +336,7 @@ const TYPE_LABEL = { G: 'Galaxy', GPair: 'Galaxy pair', GTrpl: 'Galaxy triplet',
 // and the guide text are drawn larger, and every plate / cut-out / tile gets more gain and a stronger
 // stretch (lower exponent lifts the faint outer nebulosity): more in AR, where passthrough competes,
 // a little less in VR. Desktop and phone are untouched.
-const XR = { labelScale: 2.3, cardScale: 0.1, boostAR: 1.7, boostVR: 1.6, stretch: 0.72, stretchDesk: 0.85,
+const XR = { labelScale: 2.3, cardScale: 0.1, boostAR: 1.5, boostVR: 1.15, stretch: 0.78, stretchDesk: 0.85,
   // The headset's field is fixed at ~90 deg, which the tile picker read as "wide view" and answered with the
   // coarsest sky (order 2, ~100"/px) -- soft nebulae. The Quest 3 shows ~19 px/deg, so order 4 (26"/px) around
   // the gaze is what reads as sharp; order 3 backs it, order 2 covers the rest. Cones are set for head turns.
@@ -373,7 +374,7 @@ function skyLevel(img) {                         // 25th percentile of the borde
 }
 function loadTex(o) {
   if (o.loaded) return; o.loaded = true;
-  loader.load(o.path, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter;
+  loader.load(o.path, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; t.anisotropy = renderer.capabilities.getMaxAnisotropy();
     const b = skyLevel(t.image); o.quad.material.uniforms.black.value.set(b[0], b[1], b[2]); o.quad.material.uniforms.map.value = t;
     o.quad.visible = !o.covered && !(HIPS.enabled && HIPS.loaded.size > 0); });
 }
@@ -407,7 +408,7 @@ for (const o of OBJECTS) {
 }
 function loadRegion(r) {
   if (r.loaded) return; r.loaded = true;
-  loader.load(r.path, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter;
+  loader.load(r.path, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; t.anisotropy = renderer.capabilities.getMaxAnisotropy();
     const b = skyLevel(t.image); r.quad.material.uniforms.black.value.set(b[0], b[1], b[2]); r.quad.material.uniforms.map.value = t; r.quad.visible = $('regions').checked && !(HIPS.enabled && HIPS.loaded.size > 0); });
 }
 FEATURED.forEach(loadTex);
@@ -551,7 +552,7 @@ function loadTile(t, now) {
   t.tex = 'loading'; t.last = now; HIPS.inflight++;
   const url = `${HIPS.base}/Norder${t.layer.order}/Dir${Math.floor(t.ip / 10000) * 10000}/Npix${t.ip}.jpg`;
   loader.load(url, tex => {
-    HIPS.inflight--; tex.colorSpace = THREE.SRGBColorSpace; tex.generateMipmaps = false; tex.minFilter = THREE.LinearFilter;
+    HIPS.inflight--; tex.colorSpace = THREE.SRGBColorSpace; tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter; tex.anisotropy = renderer.capabilities.getMaxAnisotropy();   // no mipmaps = star fields sparkle in the headset
     t.tex = tex; t.mesh = tileMesh(t.layer, t.ip);
     // only the coarse orders get their own sky level; deeper tiles share a fixed one, otherwise a tile that falls
     // entirely inside a bright nebula measures the nebula as "sky" and the mosaic shows as bright/dark patches
@@ -823,6 +824,7 @@ function select() {                              // trigger / pinch / click: gra
   if (!renderer.xr.isPresenting) return;
   // Align only when it is plainly meant: never aligned yet, or the reticle is on (within 12 deg of) the computed
   // Polaris. Any other empty-sky trigger just clears the selection -- it used to re-align every single time.
+  if (xrMode === 'immersive-vr') { clearSelection(); return; }     // VR: nothing real to align to; the HUD button / "align" re-centre north
   const pol = targetObj(POLARIS);
   const nearPolaris = !!pol && pol.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize().dot(fwdOf()) > Math.cos(12 * DEG);
   if (!aligned || nearPolaris) alignOn(POLARIS); else { clearSelection(); heard('trigger on empty sky: say "align" or look at Polaris to re-align', false); }
@@ -930,6 +932,7 @@ $('search').oninput = updateStrip; $('upOnly').onchange = updateStrip;
 // ---------------------------------------------------------------- inputs
 $('lat').onchange = e => { lat = +e.target.value; store('lat', lat); updateSky(); };
 $('lon').onchange = e => { lon = +e.target.value; store('lon', lon); updateSky(); };
+if (!siteStored && navigator.geolocation) navigator.geolocation.getCurrentPosition(p => { lat = +p.coords.latitude.toFixed(3); lon = +p.coords.longitude.toFixed(3); $('lat').value = lat; $('lon').value = lon; store('lat', lat); store('lon', lon); updateSky(); }, () => {}, { timeout: 8000 });
 $('geo').onclick = () => navigator.geolocation?.getCurrentPosition(p => { lat = +p.coords.latitude.toFixed(3); lon = +p.coords.longitude.toFixed(3); $('lat').value = lat; $('lon').value = lon; store('lat', lat); store('lon', lon); updateSky(); }, () => { $('geo').textContent = 'No fix'; });
 $('toff').oninput = e => { toff = +e.target.value; $('toffv').textContent = (toff >= 0 ? '+' : '') + toff.toFixed(1) + ' h'; updateSky(); };
 $('now').onclick = () => { toff = 0; $('toff').value = 0; $('toffv').textContent = '+0.0 h'; updateSky(); };
@@ -1197,6 +1200,7 @@ async function start(mode) {
     session.addEventListener('end', () => { xrMode = null; hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); applyGain(); });
     await renderer.xr.setSession(session);
     xrMode = mode; applyGain();
+    if (mode === 'immersive-vr') setTimeout(() => { alignOn(POLARIS); heard('VR: north (Polaris) set straight ahead; site ' + lat.toFixed(2) + ', ' + lon.toFixed(2) + ' ' + new Date().toLocaleTimeString(), true); }, 800);
     hud.style.display = 'flex'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = true);
     $('hudExit').onclick = () => session.end();
     updateSky();
