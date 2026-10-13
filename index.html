@@ -774,7 +774,24 @@ $('resetYaw').onclick = () => { yaw = 0; aligned = null; store('yaw', 0); store(
 // The dom-overlay HUD sits in the browser's quad, which is out of view as soon as you look around. These two
 // lines ride with the head just below the reticle: the alignment state, and a transient message (what voice
 // heard, the align countdown, confirmations). Rendered as canvas text like the sky labels.
-const hudWorld = new THREE.Group(); camera.add(hudWorld); hudWorld.visible = false;
+// NOT a child of the camera: head-locked text is displaced by the compositor's timewarp on every head move
+// (a ghost copy of the letters for a frame or two). The strip is world-placed and lazily follows the head --
+// still during a turn, then gliding back to centre -- which is Meta's recommended pattern for in-VR text.
+const hudWorld = new THREE.Group(); scene.add(hudWorld); hudWorld.visible = false;
+const _hwQ = new THREE.Quaternion(), _hwP = new THREE.Vector3();
+let hwLast = 0;
+function lazyFollow(now) {
+  const cam = renderer.xr.getCamera();
+  cam.getWorldPosition(_hwP); cam.getWorldQuaternion(_hwQ);
+  hudWorld.position.copy(_hwP);                                     // translation is tiny; only rotation lags
+  const dt = Math.min(0.1, (now - (hwLast || now)) / 1000); hwLast = now;
+  const ang = 2 * Math.acos(Math.min(1, Math.abs(hudWorld.quaternion.dot(_hwQ)))) / DEG;
+  if (ang > 10) hudWorld.userData.chasing = true;                    // outside the dead zone: start gliding
+  if (hudWorld.userData.chasing) {
+    hudWorld.quaternion.slerp(_hwQ, 1 - Math.exp(-dt / 0.25));
+    if (ang < 0.5) hudWorld.userData.chasing = false;
+  }
+}
 const hw = { state: null, msg: null, msgUntil: 0, stateUntil: 0, stateText: '', msgText: '' };
 const HW_SHOW_MS = 4000;
 function hwSet(which, text, color) {
@@ -1475,7 +1492,7 @@ renderer.setAnimationLoop(tms => {
     else if (tms - lastL > 500) { placeLabels(); lastL = tms; }
   } else if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
   if (renderer.xr.isPresenting) {
-    pollControllers(tms); hudWorld.visible = true; autoExpose(tms);
+    pollControllers(tms); hudWorld.visible = true; autoExpose(tms); lazyFollow(tms);
     if (hw.msg && tms > hw.msgUntil) hwSet('msg', '');
     if (hw.state && tms > hw.stateUntil && !alignHeld) hwSet('state', '');   // the countdown keeps refreshing it
   }
