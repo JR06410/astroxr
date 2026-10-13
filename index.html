@@ -927,7 +927,8 @@ function pollControllers(tms) {
     if (down.length && tms - (pollControllers.lastLog || 0) > 400) { pollControllers.lastLog = tms; heard((src.handedness || '?') + ' pressed ' + down.join(',') + (gp.axes.length >= 4 ? '  stick ' + gp.axes[2].toFixed(1) + ',' + gp.axes[3].toFixed(1) : ''), true); }
     if (b[4] && b[4].pressed) aDown = true;                          // xr-standard: 4 = A / X, 5 = B / Y
     if (b[5] && b[5].pressed) bDown = true;
-    if (gp.axes.length >= 4 && Math.abs(gp.axes[3]) > Math.abs(stickY)) stickY = gp.axes[3];   // either stick
+    const ay = gp.axes.length >= 4 ? gp.axes[3] : (gp.axes.length >= 2 ? gp.axes[1] : 0);   // xr-standard: stick = axes[2..3]; some pads report [0..1]
+    if (Math.abs(ay) > Math.abs(stickY)) stickY = ay;                                       // either stick
   }
   // A / X: hold to align
   if (aDown) {
@@ -1100,9 +1101,15 @@ function zoom(k) {
   if (renderer.xr.isPresenting) {
     // No camera field to change in a headset. Zoom in opens the selected object as the full-resolution
     // photograph, then magnifies it (x, y only: scaling z would just move it away at the same size).
-    if (!heldObj) { if (k < 1 && target) hold(target); return; }
+    if (!heldObj) {
+      if (k >= 1) { heard('nothing open to zoom out of', false); return; }
+      const o = objectInView() || target;                            // headset: open what the reticle is on
+      if (o) { hold(o); heard('opened ' + o.name, true); } else heard('look at an object, then zoom in', false);
+      return;
+    }
     heldZoom = Math.min(4, Math.max(1, heldZoom / k));
     held.scale.set(heldZoom, heldZoom, 1);
+    heard('magnified x' + heldZoom.toFixed(1), true);
     return;
   }
   const was = camera.fov; setFov(camera.fov * k);
