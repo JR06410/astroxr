@@ -446,7 +446,7 @@ function skyLevel(img) {                         // 25th percentile of the borde
   return ch.map(v => { v.sort((a, b) => a - b); return 0.85 * v[Math.floor(v.length * 0.12)] / 255; });   // just under the sky level
 }
 function brightLevel(img, black) {                 // 99th percentile luminance above the sky, 0..1
-  const c = document.createElement('canvas'); const n = 64; c.width = c.height = n; const g = c.getContext('2d', { willReadFrequently: true });
+  const c = document.createElement('canvas'); const n = 32; c.width = c.height = n; const g = c.getContext('2d', { willReadFrequently: true });
   g.drawImage(img, 0, 0, n, n); const d = g.getImageData(0, 0, n, n).data; const v = new Float32Array(n * n);
   for (let i = 0, j = 0; i < d.length; i += 4, j++) v[j] = Math.max(0, 0.299 * d[i] / 255 - black[0]) + Math.max(0, 0.587 * d[i + 1] / 255 - black[1]) + Math.max(0, 0.114 * d[i + 2] / 255 - black[2]);
   v.sort(); return v[Math.floor(v.length * 0.99)];
@@ -646,7 +646,8 @@ function loadTile(t, now) {
     HIPS.inflight--; tex.colorSpace = THREE.SRGBColorSpace; tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter; tex.anisotropy = renderer.capabilities.getMaxAnisotropy();   // no mipmaps = star fields sparkle in the headset
     t.tex = tex; t.mesh = tileMesh(t.layer, t.ip);
     t.mesh.material.uniforms.map.value = tex; t.mesh.visible = $('hips').checked; HIPS.loaded.add(t);
-    const enter = () => {
+    const upload = () => { if (t.mesh) { try { renderer.initTexture(tex); } catch {} } };   // phase 1: GPU upload + mipmaps
+    const enter = () => {                                               // phase 2: analysis + scene add
       if (!t.mesh) return;                                              // may have been evicted while queued
       // only the coarse orders get their own sky level; deeper tiles share a fixed one, otherwise a tile that falls
       // entirely inside a bright nebula measures the nebula as "sky" and the mosaic shows as bright/dark patches
@@ -655,7 +656,7 @@ function loadTile(t, now) {
       t.bright = brightLevel(tex.image, b);                               // for the headset's gaze auto-exposure
       hipsGroup.add(t.mesh); refreshParent(t);
     };
-    if (renderer.xr.isPresenting) HIPS.pending.push(enter); else enter();   // headset: one tile per frame (analysis + upload)
+    if (renderer.xr.isPresenting) HIPS.pending.push(upload, enter); else enter();   // headset: one phase per frame
     if (HIPS.loaded.size === 1) setHipsCoverage(true);
     if (location.search.includes('debug')) console.log('hips tile', t.layer.order, t.ip, 'loaded', HIPS.loaded.size);
   }), undefined, () => {
@@ -794,12 +795,12 @@ let hudForce = false;                                             // tap the HUD
 $('hudState').onclick = () => { hudForce = !hudForce; updateAlignState(); };
 function updateAlignState() {
   const el = $('align-state'), tx = $('alignText');
-  $('hudAlign').hidden = false;
+  if ($('hudAlign').hidden) $('hudAlign').hidden = false;
   if (!aligned) { el.classList.remove('ok'); tx.textContent = phoneMode ? 'Compass only' : 'Not aligned'; setHudState(phoneMode ? 'Compass only — put Polaris in the reticle and tap Align' : (xrMode === 'immersive-vr' ? 'Not aligned — face north and hold A (or say "align")' : 'Not aligned — reticle on Polaris, hold A (or say "align")')); return; }
   const min = Math.round((Date.now() - aligned.at) / 60000);
   const stale = min >= 10;
   el.classList.toggle('ok', !stale);
-  $('hudAlign').hidden = !stale && !hudForce;                     // aligned: the button steps aside until it goes stale
+  const hideAlign = !stale && !hudForce; if ($('hudAlign').hidden !== hideAlign) $('hudAlign').hidden = hideAlign;   // aligned: the button steps aside until it goes stale
   const s = `Aligned on ${aligned.on} · ${min < 1 ? `just now (turned ${aligned.delta >= 0 ? '+' : ''}${(aligned.delta || 0).toFixed(1)}°)` : min + ' min ago'}${stale ? ' · re-align' : ''}`;
   tx.textContent = s; setHudState(s);
 }
@@ -842,7 +843,11 @@ function hwSet(which, text, color) {
   m.position.set(0, which === 'msg' ? -0.30 : -0.40, -1.5); m.renderOrder = 60; m.material.depthTest = false;
   hudWorld.add(m); hw[which] = m;
 }
-function setHudState(text) { $('hudState').textContent = text; if (renderer.xr.isPresenting) hwSet('state', text, '#b9c1d0'); }
+let hudStateText = null;
+function setHudState(text) {
+  if (text !== hudStateText) { hudStateText = text; $('hudState').textContent = text; }   // a DOM write is an overlay repaint in XR
+  if (renderer.xr.isPresenting) hwSet('state', text, '#b9c1d0');
+}
 // ---------------------------------------------------------------- virtual eyepiece (headset zoom)
 // A headset cannot narrow its field of view, so zoom is done the way VR binoculars are: a second camera with a
 // field of LOUPE_DEG / m renders the sky into a texture each frame, shown on a head-locked panel LOUPE_DEG wide
@@ -1082,7 +1087,7 @@ function pollControllers(tms) {
   if (aDown) {
     if (!alignHeld) { alignHeld = tms; alignDone = false; }
     const left = ALIGN_HOLD_MS - (tms - alignHeld);
-    if (left > 0) setHudState('Hold… aligning in ' + (left / 1000).toFixed(1) + ' s (release to cancel)');
+    if (left > 0) hwSet('state', 'Hold… aligning in ' + (left / 1000).toFixed(1) + ' s (release to cancel)', '#ffb05a');
     else if (!alignDone) { alignDone = true; alignHere('A held'); }
   } else if (alignHeld) { alignHeld = 0; if (!alignDone) updateAlignState(); }
   // stick CLICK: right = zoom in, left = zoom out (one step per click)
@@ -1330,8 +1335,8 @@ const GRAMMAR = ['align', 'zoom in', 'zoom out', 'closer', 'wider', 'return', 'r
 function heard(text, ok) {
   console.log('[voice]', ok ? 'ok' : '??', text);
   telemetry('voice ' + (ok ? 'ok ' : '?? ') + text);
-  if (renderer.xr.isPresenting) hwSet('msg', text, ok ? '#ffb05a' : '#8e97a8');
-  const el = $(renderer.xr.isPresenting ? 'heard' : 'heardDesk');
+  if (renderer.xr.isPresenting) { hwSet('msg', text, ok ? '#ffb05a' : '#8e97a8'); return; }   // strip only: no overlay repaint
+  const el = $('heardDesk');
   el.hidden = false; el.textContent = (ok ? 'mic: ' : 'mic ? ') + text; el.style.color = ok ? '' : 'var(--muted)';
   clearTimeout(heard.t); heard.t = setTimeout(() => { el.hidden = true; }, 2500);
 }
@@ -1339,7 +1344,7 @@ function handleTranscripts(alts) {                                   // alts: ca
   for (const [re, name, fn] of VOICE) if (alts.some(t => re.test(t))) { heard(name, true); fn(); return; }
   if (alts[0]) heard(alts[0], false);
 }
-function voiceLabel(t) { t = t || (voiceOn ? 'Voice on' : 'Voice'); for (const id of ['voice', 'hudVoice']) { $(id).textContent = t; $(id).classList.toggle('on', voiceOn); } }
+function voiceLabel(t) { t = t || (voiceOn ? 'Voice on' : 'Voice'); for (const id of ['voice', 'hudVoice']) { if ($(id).textContent !== t) $(id).textContent = t; $(id).classList.toggle('on', voiceOn); } }
 // --- back end 1: Web Speech API
 function startSR() {
   try { rec = new SR(); } catch (e) { notice('Speech recognition failed: ' + e.message); voiceOn = false; voiceLabel(); return; }
@@ -1567,17 +1572,18 @@ renderer.setAnimationLoop(tms => {
         tele.worst = 0; tele.sum = 0; tele.n = 0; tele.tEnter = tele.tLabels = tele.tHips = tele.tSky = tele.tLoupe = 0;
       }
       const show = perfShow || (renderer.xr.isPresenting && perf.sessionAt && tms - perf.sessionAt < 15000);
-      if (show) { if (renderer.xr.isPresenting) hwSet('msg', txt, '#ffb05a'); else { $('heardDesk').hidden = false; $('heardDesk').textContent = txt; } }
+      if (show) { if (renderer.xr.isPresenting) hwSet('msg', txt, '#ffb05a'); else { $('heardDesk').hidden = false; $('heardDesk').textContent = txt; } }   // in XR: strip only
       perf.at = tms; perf.n = 0; perf.sum = 0; perf.worst = 0;
     }
   }
   if (renderer.xr.isPresenting) {
-    if (skyPhase > 0 || tms - last > 1000) { if (timed('tSky', updateSkyStaggered)) last = tms; }   // mid-sequence: keep stepping
-    else if (tms - lastL > 500) { timed('tLabels', placeLabels); lastL = tms; }
+    const tileFrame = HIPS.pending.length > 0 && skyPhase === 0;        // a tile phase runs this frame: skip the periodic work
+    if (skyPhase > 0 || (!tileFrame && tms - last > 1000)) { if (timed('tSky', updateSkyStaggered)) last = tms; }   // mid-sequence: keep stepping
+    else if (!tileFrame && tms - lastL > 500) { timed('tLabels', placeLabels); lastL = tms; }
   } else if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
   if (renderer.xr.isPresenting) {
     pollControllers(tms); hudWorld.visible = true; autoExpose(tms); lazyFollow(tms);
-    if (HIPS.pending.length) timed('tEnter', HIPS.pending.shift());           // one tile per frame: analysis + upload
+    if (HIPS.pending.length && skyPhase === 0) timed('tEnter', HIPS.pending.shift());   // one tile phase per frame, never with a sky step
     for (let i = 0; i < 2 && warmQueue.length; i++) { const t = warmQueue.shift(); try { renderer.initTexture(t); t.__warm = true; } catch {} }
     if (hw.msg && tms > hw.msgUntil) hwSet('msg', '');
     if (hw.state && tms > hw.stateUntil && !alignHeld) hwSet('state', '');   // the countdown keeps refreshing it
