@@ -253,10 +253,12 @@ function placeOnSky(obj, raDeg, decDeg, dist = R) {
 
 // Labels: canvas planes in a horizon-aligned group so text stays level. Placed each second from an anchor.
 function label(lines, color = '#e8ecf4', heightDeg = 0.9, px = 56) {
-  const c = document.createElement('canvas'); c.width = 1024; c.height = Math.round(px * 1.7) * lines.length + 16;
-  const g = c.getContext('2d'); g.textAlign = 'center';
-  lines.forEach((t, i) => { g.font = (i ? `400 ${Math.round(px * 0.72)}px` : `600 ${px}px`) + ' "IBM Plex Sans", "Segoe UI", sans-serif';
-    g.fillStyle = i ? '#b9c1d0' : color; g.fillText(t, 512, px * 1.15 + i * px * 1.6); });
+  const c = document.createElement('canvas'); const g = c.getContext('2d');
+  const fontOf = i => (i ? `400 ${Math.round(px * 0.72)}px` : `600 ${px}px`) + ' "IBM Plex Sans", "Segoe UI", sans-serif';
+  let wmax = 0; lines.forEach((t, i) => { g.font = fontOf(i); wmax = Math.max(wmax, g.measureText(t).width); });
+  c.width = Math.max(1024, Math.ceil(wmax) + 80); c.height = Math.round(px * 1.7) * lines.length + 16;   // never truncate
+  g.textAlign = 'center';
+  lines.forEach((t, i) => { g.font = fontOf(i); g.fillStyle = i ? '#b9c1d0' : color; g.fillText(t, c.width / 2, px * 1.15 + i * px * 1.6); });
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
   const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
   const h = chord(heightDeg * DEG * lines.length); m.scale.set(h * c.width / c.height, h, 1);
@@ -668,7 +670,8 @@ function updateSky() {
   for (const p of PLANETS) BODY[p].visible = $('planets').checked && bodyHor[p].altitude > -2;
   placeLabels();
   $('clock').textContent = `${nowT().toUTCString().slice(5, 25)} UTC${frozenAt ? '  (frozen)' : ''}`;
-  updateStrip(); updateAlignState();
+  if (!renderer.xr.isPresenting) updateStrip();                     // the strip is hidden in a session; rebuilding it cost a frame
+  updateAlignState();
 }
 function altOf(obj) { const p = obj.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize(); return Math.asin(p.y) / DEG; }
 
@@ -709,10 +712,14 @@ $('resetYaw').onclick = () => { yaw = 0; aligned = null; store('yaw', 0); store(
 // lines ride with the head just below the reticle: the alignment state, and a transient message (what voice
 // heard, the align countdown, confirmations). Rendered as canvas text like the sky labels.
 const hudWorld = new THREE.Group(); camera.add(hudWorld); hudWorld.visible = false;
-const hw = { state: null, msg: null, msgUntil: 0 };
+const hw = { state: null, msg: null, msgUntil: 0, stateUntil: 0, stateText: '', msgText: '' };
+const HW_SHOW_MS = 4000;
 function hwSet(which, text, color) {
+  if (text && text === hw[which + 'Text']) { hw[which + 'Until'] = performance.now() + HW_SHOW_MS; return; }   // same text: just keep it up
+  hw[which + 'Text'] = text || '';
   if (hw[which]) { hudWorld.remove(hw[which]); hw[which].material.map.dispose(); hw[which].material.dispose(); hw[which] = null; }
   if (!text) return;
+  hw[which + 'Until'] = performance.now() + HW_SHOW_MS;
   const m = label([text], color, 2.0, 56); m.scale.multiplyScalar(0.03);           // 2 deg high at 1.5 m
   m.position.set(0, which === 'msg' ? -0.30 : -0.40, -1.5); m.renderOrder = 10; m.material.depthTest = false;
   hudWorld.add(m); hw[which] = m;
@@ -1114,7 +1121,7 @@ const VOICE = [
 const GRAMMAR = ['align', 'zoom in', 'zoom out', 'closer', 'wider', 'return', 'reset', 'freeze', 'live', '[unk]'];
 function heard(text, ok) {
   console.log('[voice]', ok ? 'ok' : '??', text);
-  if (renderer.xr.isPresenting) { hwSet('msg', text, ok ? '#ffb05a' : '#8e97a8'); hw.msgUntil = performance.now() + 3000; }
+  if (renderer.xr.isPresenting) hwSet('msg', text, ok ? '#ffb05a' : '#8e97a8');
   const el = $(renderer.xr.isPresenting ? 'heard' : 'heardDesk');
   el.hidden = false; el.textContent = (ok ? 'mic: ' : 'mic ? ') + text; el.style.color = ok ? '' : 'var(--muted)';
   clearTimeout(heard.t); heard.t = setTimeout(() => { el.hidden = true; }, 2500);
@@ -1301,7 +1308,11 @@ let last = 0, lastL = 0;
 updateSky();
 renderer.setAnimationLoop(tms => {
   if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
-  if (renderer.xr.isPresenting) { pollControllers(tms); hudWorld.visible = true; if (hw.msg && tms > hw.msgUntil) hwSet('msg', ''); }
+  if (renderer.xr.isPresenting) {
+    pollControllers(tms); hudWorld.visible = true;
+    if (hw.msg && tms > hw.msgUntil) hwSet('msg', '');
+    if (hw.state && tms > hw.stateUntil && !alignHeld) hwSet('state', '');   // the countdown keeps refreshing it
+  }
   else if (hudWorld.visible) { hudWorld.visible = false; hwSet('msg', ''); }
   const eye = eyeOf();
   horizon.position.copy(eye); sky.matrix.setPosition(eye);        // sky and horizon ride with the eye: everything is at infinity
