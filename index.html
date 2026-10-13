@@ -797,8 +797,8 @@ function loupeSet(m) {
   loupe.m = Math.min(16, Math.max(1, m));
   loupe.cam.fov = LOUPE_DEG / loupe.m; loupe.cam.updateProjectionMatrix();
   loupe.quad.visible = loupe.ring.visible = loupe.m > 1;
-  HIPS.maxInflight = loupe.m > 1 ? 12 : (HIPS.maxInflightBase || HIPS.maxInflight);
-  if (!HIPS.maxInflightBase) HIPS.maxInflightBase = HIPS.maxInflight;
+  if (!HIPS.maxInflightBase) HIPS.maxInflightBase = HIPS.maxInflight;     // remember the normal limit first
+  HIPS.maxInflight = loupe.m > 1 ? 12 : HIPS.maxInflightBase;
   updateHips(fwdOf(), performance.now());                            // finer tiles for the narrower field, now                                                        // finer tiles for the narrower field, now
   heard(loupe.m > 1 ? 'zoom x' + loupe.m + '  (' + (LOUPE_DEG / loupe.m).toFixed(1) + '\u00b0 field)' : 'zoom off', true);
 }
