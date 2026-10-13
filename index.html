@@ -196,7 +196,7 @@ const STARS = DATA.stars.map(st => [st.n, st.r, st.d, st.m]);
 const PLANETS = ['Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn'];
 const R = 50;                                   // sky radius, metres (everything sits "at infinity")
 // telemetry state + worst-case timer: declared first, they are touched by code that runs during start-up
-const tele = { url: null, at: 0, worst: 0, sum: 0, n: 0, tEnter: 0, tLabels: 0, tHips: 0, tSky: 0, tLoupe: 0 };
+const tele = { url: null, at: 0, worst: 0, sum: 0, n: 0, tEnter: 0, tUpload: 0, tLabels: 0, tHips: 0, tSky: 0, tLoupe: 0 };
 const timed = (key, fn) => { const t0 = performance.now(); const r = fn(); const dt = performance.now() - t0; if (dt > tele[key]) tele[key] = dt; return r; };
 
 const DEG = Math.PI / 180, ARCMIN = DEG / 60;
@@ -445,6 +445,21 @@ function skyLevel(img) {                         // 25th percentile of the borde
   for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (x < 4 || y < 4 || x >= n - 4 || y >= n - 4) { const i = (y * n + x) * 4; ch[0].push(d[i]); ch[1].push(d[i + 1]); ch[2].push(d[i + 2]); }
   return ch.map(v => { v.sort((a, b) => a - b); return 0.85 * v[Math.floor(v.length * 0.12)] / 255; });   // just under the sky level
 }
+const _anaC = document.createElement('canvas'); _anaC.width = _anaC.height = 32;
+const _anaG = _anaC.getContext('2d', { willReadFrequently: true });
+function analyseTile(img, fixedBlack) {             // -> { black: [r,g,b], bright } in one readback
+  const n = 32; _anaG.drawImage(img, 0, 0, n, n); const d = _anaG.getImageData(0, 0, n, n).data;
+  let black = fixedBlack;
+  if (!black) {
+    const ch = [[], [], []];
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (x < 2 || y < 2 || x >= n - 2 || y >= n - 2) { const i = (y * n + x) * 4; ch[0].push(d[i]); ch[1].push(d[i + 1]); ch[2].push(d[i + 2]); }
+    black = ch.map(v => { v.sort((a, b) => a - b); return 0.85 * v[Math.floor(v.length * 0.12)] / 255; });
+  }
+  const v = new Float32Array(n * n);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) v[j] = Math.max(0, 0.299 * d[i] / 255 - black[0]) + Math.max(0, 0.587 * d[i + 1] / 255 - black[1]) + Math.max(0, 0.114 * d[i + 2] / 255 - black[2]);
+  v.sort();
+  return { black, bright: v[Math.floor(v.length * 0.99)] };
+}
 function brightLevel(img, black) {                 // 99th percentile luminance above the sky, 0..1
   const c = document.createElement('canvas'); const n = 32; c.width = c.height = n; const g = c.getContext('2d', { willReadFrequently: true });
   g.drawImage(img, 0, 0, n, n); const d = g.getImageData(0, 0, n, n).data; const v = new Float32Array(n * n);
@@ -651,12 +666,12 @@ function loadTile(t, now) {
       if (!t.mesh) return;                                              // may have been evicted while queued
       // only the coarse orders get their own sky level; deeper tiles share a fixed one, otherwise a tile that falls
       // entirely inside a bright nebula measures the nebula as "sky" and the mosaic shows as bright/dark patches
-      const b = t.layer.order <= 4 ? skyLevel(tex.image) : [0.04, 0.04, 0.04];
-      t.mesh.material.uniforms.black.value.set(b[0], b[1], b[2]);
-      t.bright = brightLevel(tex.image, b);                               // for the headset's gaze auto-exposure
+      const a = analyseTile(tex.image, t.layer.order <= 4 ? null : [0.04, 0.04, 0.04]);   // one readback
+      t.mesh.material.uniforms.black.value.set(a.black[0], a.black[1], a.black[2]);
+      t.bright = a.bright;                                                // for the headset's gaze auto-exposure
       hipsGroup.add(t.mesh); refreshParent(t);
     };
-    if (renderer.xr.isPresenting) HIPS.pending.push(upload, enter); else enter();   // headset: one phase per frame
+    if (renderer.xr.isPresenting) HIPS.pending.push(() => timed('tUpload', upload), enter); else enter();   // headset: one phase per frame
     if (HIPS.loaded.size === 1) setHipsCoverage(true);
     if (location.search.includes('debug')) console.log('hips tile', t.layer.order, t.ip, 'loaded', HIPS.loaded.size);
   }), undefined, () => {
@@ -1522,6 +1537,7 @@ async function start(mode) {
     warmQueue = LABELS.map(L => L.mesh.material.map).filter(t => t && !t.__warm);   // upload label textures gradually
     telemetry('session start ' + mode + ' ' + new Date().toISOString() + ' ' + (navigator.userAgent.match(/OculusBrowser\/[\d.]+/) || navigator.userAgent.slice(0, 60)) + ' fb ' + (qsx.get('fb') || '1.0') + ' fov ' + (qsx.get('fov') || '0.5') + ' xorder ' + (qsx.get('xorder') || 'default'));
     skyMat.uniforms.map.value = dssTex; skyMat.uniforms.black.value.copy(dssBlack);   // DSS2 base in the headset
+    if (!loupe.rt) loupeInit(); try { renderer.compile(scene, loupe.cam); } catch {}       // eyepiece ready: no 50 ms first-use stall
     xrMode = mode; AE.knee = AE.target = (mode === 'immersive-ar' ? XR.kneeAR : XR.kneeVR); applyGain();
     $('hudAlign').textContent = mode === 'immersive-vr' ? 'Align: north here' : 'Align on Polaris';
     if (mode === 'immersive-vr') setTimeout(() => { alignOn(POLARIS); heard('VR: north (Polaris) set straight ahead; site ' + lat.toFixed(2) + ', ' + lon.toFixed(2) + ' ' + new Date().toLocaleTimeString(), true); }, 800);
@@ -1568,8 +1584,8 @@ renderer.setAnimationLoop(tms => {
       tele.worst = Math.max(tele.worst, perf.worst); tele.sum += perf.sum; tele.n += perf.n;
       if (renderer.xr.isPresenting && tms - tele.at > 10000) {
         tele.at = tms;
-        telemetry(`${xrMode === 'immersive-ar' ? 'AR' : 'VR'} avg ${(tele.sum / Math.max(1, tele.n)).toFixed(1)}ms worst ${tele.worst.toFixed(1)}ms draws ${info.calls} tris ${(info.triangles / 1000).toFixed(0)}k tiles ${HIPS.loaded.size} order ${HIPS.maxOrder} zoom x${loupe.m} labels ${LABELS.filter(L => L.mesh.visible).length} heap ${performance.memory ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + 'MB' : '?'} warm ${warmQueue.length} | max ms: enter ${tele.tEnter.toFixed(1)} labels ${tele.tLabels.toFixed(1)} hips ${tele.tHips.toFixed(1)} sky ${tele.tSky.toFixed(1)} loupe ${tele.tLoupe.toFixed(1)}`);
-        tele.worst = 0; tele.sum = 0; tele.n = 0; tele.tEnter = tele.tLabels = tele.tHips = tele.tSky = tele.tLoupe = 0;
+        telemetry(`${xrMode === 'immersive-ar' ? 'AR' : 'VR'} avg ${(tele.sum / Math.max(1, tele.n)).toFixed(1)}ms worst ${tele.worst.toFixed(1)}ms draws ${info.calls} tris ${(info.triangles / 1000).toFixed(0)}k tiles ${HIPS.loaded.size} order ${HIPS.maxOrder} zoom x${loupe.m} labels ${LABELS.filter(L => L.mesh.visible).length} heap ${performance.memory ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + 'MB' : '?'} warm ${warmQueue.length} | max ms: upload ${tele.tUpload.toFixed(1)} enter ${tele.tEnter.toFixed(1)} labels ${tele.tLabels.toFixed(1)} hips ${tele.tHips.toFixed(1)} sky ${tele.tSky.toFixed(1)} loupe ${tele.tLoupe.toFixed(1)}`);
+        tele.worst = 0; tele.sum = 0; tele.n = 0; tele.tEnter = tele.tUpload = tele.tLabels = tele.tHips = tele.tSky = tele.tLoupe = 0;
       }
       const show = perfShow || (renderer.xr.isPresenting && perf.sessionAt && tms - perf.sessionAt < 15000);
       if (show) { if (renderer.xr.isPresenting) hwSet('msg', txt, '#ffb05a'); else { $('heardDesk').hidden = false; $('heardDesk').textContent = txt; } }   // in XR: strip only
