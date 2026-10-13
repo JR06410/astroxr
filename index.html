@@ -366,6 +366,17 @@ const kneeVal = () => (!renderer.xr.isPresenting ? 0.0 : AE.knee);   // 0 = powe
 function autoExpose(now) {
   if (!renderer.xr.isPresenting || now - AE.at < 500) return;
   AE.at = now;
+  // eyepiece at x4 or more: small objects in the field get their PanSTARRS / DSS2 cut-out laid on the sky
+  const deep = loupe.m >= 4; hiQuadsVisible(deep && !heldObj);
+  if (deep) {
+    const f = fwdOf().clone(), cosF = Math.cos((LOUPE_DEG / loupe.m / 2 + 1.5) * DEG); let busy = 0;
+    for (const o of OBJECTS) if (o.hiLoading) busy++;
+    for (const o of OBJECTS) {
+      if (busy >= 2) break;
+      if (o.hiTex || o.hiLoading || o.hiFailed || o.size[0] > 16) continue;
+      if (o.quad.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize().dot(f) > cosF) { loadHi(o); busy++; }
+    }
+  }
   const g = fwdOf().clone().applyMatrix3(skyInv).normalize();        // gaze in the sky frame (skyInv is kept by updateHips)
   const near = Math.cos(25 * DEG); let bright = 0;
   for (const t of HIPS.loaded) if (t.bright != null && t.layer.order >= 3 && t.centre.dot(g) > near) bright = Math.max(bright, t.bright);
@@ -380,10 +391,10 @@ function autoExpose(now) {
 // a lighter box) and feathers the edges over the outer 14% of the field, then adds the result to the sky.
 function surveyMaterial() {
   return new THREE.ShaderMaterial({
-    uniforms: { map: { value: null }, black: { value: new THREE.Vector3(0, 0, 0) }, gain: { value: 1.0 }, feather: { value: 0.14 }, dechroma: { value: 1.0 }, stretch: { value: 0.85 }, knee: { value: 0.0 } },
+    uniforms: { map: { value: null }, black: { value: new THREE.Vector3(0, 0, 0) }, gain: { value: 1.0 }, feather: { value: 0.14 }, dechroma: { value: 1.0 }, stretch: { value: 0.85 }, knee: { value: 0.0 }, replace: { value: 0.0 } },
     transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-    fragmentShader: `uniform sampler2D map; uniform vec3 black; uniform float gain; uniform float feather; uniform float dechroma; uniform float stretch; uniform float knee; varying vec2 vUv;
+    fragmentShader: `uniform sampler2D map; uniform vec3 black; uniform float gain; uniform float feather; uniform float dechroma; uniform float stretch; uniform float knee; uniform float replace; varying vec2 vUv;
       vec3 asinh3(vec3 x) { return log(x + sqrt(x * x + 1.0)); }
       void main(){ vec4 c = texture2D(map, vUv, -0.6);                                  // sharper mip pick when minified
         float a = smoothstep(0.0, feather, vUv.x) * smoothstep(0.0, feather, 1.0 - vUv.x) * smoothstep(0.0, feather, vUv.y) * smoothstep(0.0, feather, 1.0 - vUv.y);
@@ -396,7 +407,7 @@ function surveyMaterial() {
         float l = dot(col, vec3(0.299, 0.587, 0.114));
         float sat = l > 0.004 ? (max(col.r, max(col.g, col.b)) - min(col.r, min(col.g, col.b))) / max(l, 0.004) : 0.0;
         col = mix(col, vec3(l), dechroma * smoothstep(1.15, 2.1, sat) * 0.9);
-        gl_FragColor = vec4(col, 1.0); }`,
+        gl_FragColor = vec4(col, replace > 0.5 ? a : 1.0); }`,   // replace: feathered alpha over the tiles
   });
 }
 function skyLevel(img) {                         // 25th percentile of the border pixels, per channel
@@ -803,7 +814,7 @@ function loupeSet(m) {
   heard(loupe.m > 1 ? 'zoom x' + loupe.m + '  (' + (LOUPE_DEG / loupe.m).toFixed(1) + '\u00b0 field)' : 'zoom off', true);
 }
 function loupeRender() {
-  if (loupe.m <= 1 || !renderer.xr.isPresenting) return;
+  if (loupe.m <= 1 || !renderer.xr.isPresenting || heldObj) return;
   const xc = renderer.xr.getCamera();
   xc.getWorldPosition(loupe.cam.position); xc.getWorldQuaternion(loupe.cam.quaternion); loupe.cam.updateMatrixWorld(true);
   const hide = [labels, horizon, reticle, guide, hudWorld, held, loupe.quad, loupe.ring, hiRing, frame];
@@ -817,11 +828,62 @@ function loupeRender() {
   finally { renderer.setRenderTarget(prevTarget); renderer.xr.enabled = true; }
   hide.forEach((o, i) => { o.visible = was[i]; });
 }
+// Full-resolution survey cut-out for one object (PanSTARRS DR1 for small objects north of dec -29, else
+// DSS2 colour; tried in order until one returns usable pixels). Used by the opened photograph AND by the
+// eyepiece, which lays it on the sky at true scale over the coarser DSS2 tiles.
+function loadHi(o) {
+  if (o.hiTex || o.hiLoading || o.hiFailed || !HIPS.enabled) return;
+  const fovDeg = Math.max(0.1, o.size[0] * 1.15 / 60), aspect = o.field[0] / o.field[1];
+  o.hiLoading = true;
+  const px = 1600, py = Math.round(px / aspect);
+  const tries = [];
+  if (o.size[0] <= 16 && o.dec > -29) tries.push(['CDS/P/PanSTARRS/DR1/color', 'PanSTARRS DR1']);
+  tries.push(['CDS/P/DSS2/color', 'DSS2 colour']);
+  const usable = img => {                                           // reject no-coverage frames
+    const n = 48, c = document.createElement('canvas'); c.width = c.height = n;
+    const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0, n, n);
+    const d = g.getImageData(0, 0, n, n).data;
+    let white = 0, black = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+      if (v > 247) white++; else if (v < 3) black++;
+    }
+    const total = n * n;
+    return white / total < 0.3 && black / total < 0.97;
+  };
+  const tryNext = i => {
+    if (i >= tries.length) { o.hiLoading = false; o.hiFailed = true; return; }
+    const [hips, name] = tries[i];
+    const url = `https://alasky.cds.unistra.fr/hips-image-services/hips2fits?hips=${encodeURIComponent(hips)}&width=${px}&height=${py}&fov=${fovDeg}&projection=TAN&coordsys=icrs&ra=${o.ra}&dec=${o.dec}&format=jpg`;
+    loader.load(url, t => {
+      if (!usable(t.image)) { t.dispose(); tryNext(i + 1); return; }
+      t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      o.hiTex = t; o.survey = [hips, name]; o.hiLoading = false;
+      ensureHiQuad(o); if (o.onHi) o.onHi();
+    }, undefined, () => tryNext(i + 1));
+  };
+  tryNext(0);
+}
+const HIQ = [];                                                    // true-scale hi-res patches shown in the eyepiece
+function ensureHiQuad(o) {
+  if (o.hiQuad || !o.hiTex) return;
+  const fovDeg = Math.max(0.1, o.size[0] * 1.15 / 60), aspect = o.field[0] / o.field[1];
+  const m = surveyMaterial(); m.blending = THREE.NormalBlending;         // REPLACES the tiles beneath (no additive doubling)
+  m.uniforms.map.value = o.hiTex; m.uniforms.feather.value = 0.12; m.uniforms.replace.value = 1.0;
+  const bl = skyLevel(o.hiTex.image); m.uniforms.black.value.set(bl[0], bl[1], bl[2]);
+  m.uniforms.gain.value = gainVal(); m.uniforms.stretch.value = stretchVal(); m.uniforms.knee.value = kneeVal();
+  const q = new THREE.Mesh(new THREE.PlaneGeometry(chord(fovDeg * DEG), chord(fovDeg / aspect * DEG)), m);
+  q.renderOrder = 1; q.visible = false; placeOnSky(q, o.ra, o.dec); sky.add(q); o.hiQuad = q; HIQ.push(q);
+  if (renderer.xr.isPresenting) heard((o.survey ? o.survey[1] : 'hi-res') + ' for ' + o.name, true);
+}
+function hiQuadsVisible(on) { for (const q of HIQ) q.visible = on; }
 // ---------------------------------------------------------------- pull an object closer
 const held = new THREE.Group(); camera.add(held); held.visible = false;
 let heldObj = null;
 function hold(o) {
   loadTex(o); held.clear(); heldObj = o; heldZoom = 1; held.scale.set(1, 1, 1);
+  if (loupe.quad) { loupe.quad.visible = loupe.ring.visible = false; }      // the eyepiece steps aside for the photograph
   // The opened view is a framed photograph on an opaque backing: a tight survey cut-out from hips2fits at full
   // resolution — PanSTARRS DR1 for small objects (DSS2 clips their cores), DSS2 colour for the wide fields.
   const D = 1.2, span = 26 * DEG;
@@ -844,43 +906,7 @@ function hold(o) {
   const useHi = () => { mat.map = o.hiTex; mat.needsUpdate = true; q.scale.setScalar(1); recard((o.survey || ['', 'DSS2 colour'])[1]); };
   let card;
   if (o.hiTex) useHi();
-  else if (HIPS.enabled && !o.hiLoading) {
-    // Broadband surveys only, so colours stay close to what the eye and a camera record. PanSTARRS DR1 is sharper
-    // for small objects but stops at dec -29; DSS2 colour is the all-sky backstop. Candidates are tried in order
-    // until one returns usable pixels, because hips2fits hands back a blank or white frame outside a survey's
-    // footprint. Tested and rejected: DESI Legacy DR10 is deeper but its g/r/z composite renders galaxies teal,
-    // and the NSNS narrowband survey shows far more nebula structure but in an [OIII]/Ha/[SII] palette.
-    o.hiLoading = true;
-    const px = 1600, py = Math.round(px / aspect);
-    const tries = [];
-    if (o.size[0] <= 16 && o.dec > -29) tries.push(['CDS/P/PanSTARRS/DR1/color', 'PanSTARRS DR1']);
-    tries.push(['CDS/P/DSS2/color', 'DSS2 colour']);
-    const usable = img => {                                           // reject no-coverage frames
-      const n = 48, c = document.createElement('canvas'); c.width = c.height = n;
-      const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0, n, n);
-      const d = g.getImageData(0, 0, n, n).data;
-      let white = 0, black = 0;
-      for (let i = 0; i < d.length; i += 4) {
-        const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
-        if (v > 247) white++; else if (v < 3) black++;
-      }
-      const total = n * n;
-      return white / total < 0.3 && black / total < 0.97;
-    };
-    const tryNext = i => {
-      if (i >= tries.length) { o.hiLoading = false; return; }
-      const [hips, name] = tries[i];
-      const url = `https://alasky.cds.unistra.fr/hips-image-services/hips2fits?hips=${encodeURIComponent(hips)}&width=${px}&height=${py}&fov=${fovDeg}&projection=TAN&coordsys=icrs&ra=${o.ra}&dec=${o.dec}&format=jpg`;
-      loader.load(url, t => {
-        if (!usable(t.image)) { t.dispose(); tryNext(i + 1); return; }
-        t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter;
-        t.anisotropy = renderer.capabilities.getMaxAnisotropy();
-        o.hiTex = t; o.survey = [hips, name];
-        if (heldObj === o) useHi();
-      }, undefined, () => tryNext(i + 1));
-    };
-    tryNext(0);
-  }
+  else { o.onHi = () => { if (heldObj === o) useHi(); }; loadHi(o); heard('fetching the full-resolution image…', true); }
   for (const [k, col, op] of [[0, 0xffb05a, 0.95], [1, 0x1f2b44, 0.9]]) {    // bright inner frame, dark outer edge
     const ww = w + pad * 2 * k, hh = h + pad * 2 * k;
     const pts = [new THREE.Vector3(-ww / 2, -hh / 2, 0), new THREE.Vector3(ww / 2, -hh / 2, 0), new THREE.Vector3(ww / 2, hh / 2, 0), new THREE.Vector3(-ww / 2, hh / 2, 0)];
@@ -908,6 +934,7 @@ function release() {
   held.scale.setScalar(1); held.position.z = 0; dimSky(false); reticle.visible = true;
   heldObj.quad.visible = true; labels.visible = true;
   const was = target; heldObj = null; held.visible = false; held.clear();
+  if (loupe.m > 1 && loupe.quad) { loupe.quad.visible = loupe.ring.visible = true; }   // eyepiece back
   if (was) setTarget(was);                         // closing also clears the selection, so no frame is left behind
   document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active'));
 }
@@ -1119,6 +1146,7 @@ function applyGain() {                                             // slider x h
   for (const o of OBJECTS) { o.quad.material.uniforms.gain.value = g; o.quad.material.uniforms.stretch.value = st; o.quad.material.uniforms.knee.value = kn; }
   for (const r of REGIONS) { r.quad.material.uniforms.gain.value = 2.2 * g; r.quad.material.uniforms.stretch.value = st; r.quad.material.uniforms.knee.value = kn; }
   for (const t of HIPS.loaded) { t.mesh.material.uniforms.gain.value = HIPS.gain * g; t.mesh.material.uniforms.stretch.value = st; t.mesh.material.uniforms.knee.value = kn; }
+  for (const q of HIQ) { q.material.uniforms.gain.value = g; q.material.uniforms.stretch.value = st; q.material.uniforms.knee.value = kn; }
 }
 $('gain').oninput = applyGain;
 $('outlines').onchange = e => OBJECTS.forEach(o => { o.edge.visible = e.target.checked; });
