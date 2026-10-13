@@ -802,9 +802,13 @@ function loupeRender() {
   xc.getWorldPosition(loupe.cam.position); xc.getWorldQuaternion(loupe.cam.quaternion); loupe.cam.updateMatrixWorld(true);
   const hide = [labels, horizon, reticle, guide, hudWorld, held, loupe.quad, loupe.ring, hiRing, frame];
   const was = hide.map(o => o.visible); hide.forEach(o => { o.visible = false; });
+  // In an XR frame the headset's layer framebuffer is ALREADY the current render target when this runs.
+  // Restoring "null" afterwards pointed the main render at the invisible canvas and the headset kept showing
+  // its last frame, stuck to the head. Save and restore whatever target was current.
+  const prevTarget = renderer.getRenderTarget();
   try { renderer.xr.enabled = false; renderer.setRenderTarget(loupe.rt); renderer.render(scene, loupe.cam); }
   catch (e) { console.error('[loupe]', e); if (!loupe.err) { loupe.err = true; heard('eyepiece render failed: ' + (e && e.message || e), false); } loupe.m = 1; loupe.quad.visible = loupe.ring.visible = false; }
-  finally { renderer.setRenderTarget(null); renderer.xr.enabled = true; }
+  finally { renderer.setRenderTarget(prevTarget); renderer.xr.enabled = true; }
   hide.forEach((o, i) => { o.visible = was[i]; });
 }
 // ---------------------------------------------------------------- pull an object closer
@@ -988,7 +992,7 @@ function pollControllers(tms) {
   // One zoom step per deliberate push: forward = in, back = out. The push must be held ~80 ms (a spring-back
   // overshoot is shorter), the opposite direction is ignored for 300 ms after a step, and the stick must come
   // back to centre before the next step -- without this a single flick read as in-then-out ("zoom off").
-  const dir = stickY < -0.7 ? -1 : stickY > 0.7 ? 1 : 0;
+  const dir = stickY < -0.55 ? -1 : stickY > 0.55 ? 1 : 0;
   if (dir && !stickWas) {
     if (stick.dir !== dir) { stick.dir = dir; stick.since = tms; }
     else if (tms - stick.since > 80 && !(tms - stick.lastAt < 300 && dir === -stick.lastDir)) {
