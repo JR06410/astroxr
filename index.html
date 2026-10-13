@@ -196,7 +196,7 @@ const STARS = DATA.stars.map(st => [st.n, st.r, st.d, st.m]);
 const PLANETS = ['Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn'];
 const R = 50;                                   // sky radius, metres (everything sits "at infinity")
 // telemetry state + worst-case timer: declared first, they are touched by code that runs during start-up
-const tele = { url: null, at: 0, worst: 0, sum: 0, n: 0, tEnter: 0, tUpload: 0, tLabels: 0, tHips: 0, tSky: 0, tLoupe: 0 };
+const tele = { url: null, at: 0, worst: 0, sum: 0, n: 0, tEnter: 0, tUpload: 0, tLabels: 0, tHips: 0, tSky: 0, tLoupe: 0, tRender: 0, tStrip: 0, tGain: 0, tJs: 0 };
 const timed = (key, fn) => { const t0 = performance.now(); const r = fn(); const dt = performance.now() - t0; if (dt > tele[key]) tele[key] = dt; return r; };
 
 const DEG = Math.PI / 180, ARCMIN = DEG / 60;
@@ -850,6 +850,9 @@ const hw = { state: null, msg: null, msgUntil: 0, stateUntil: 0, stateText: '', 
 const HW_SHOW_MS = 4000;
 function hwSet(which, text, color) {
   if (text && text === hw[which + 'Text']) { hw[which + 'Until'] = performance.now() + HW_SHOW_MS; return; }   // same text: just keep it up
+  const _t0 = performance.now(); try { return hwSetInner(which, text, color); } finally { const dt = performance.now() - _t0; if (dt > tele.tStrip) tele.tStrip = dt; }
+}
+function hwSetInner(which, text, color) {
   hw[which + 'Text'] = text || '';
   if (hw[which]) { hudWorld.remove(hw[which]); hw[which].material.map.dispose(); hw[which].material.dispose(); hw[which] = null; }
   if (!text) return;
@@ -896,6 +899,7 @@ function loupeSet(m) {
   heard(loupe.m > 1 ? 'zoom x' + loupe.m + '  (' + (LOUPE_DEG / loupe.m).toFixed(1) + '\u00b0 field)' : 'zoom off', true);
 }
 function loupeRender() {
+  if (loupe.warm && renderer.xr.isPresenting) { loupe.warm = false; const m = loupe.m; loupe.m = 2; loupe.cam.fov = LOUPE_DEG / 2; loupe.cam.updateProjectionMatrix(); try { loupeRender(); } catch {} loupe.m = m; loupe.cam.fov = LOUPE_DEG / Math.max(1, m); loupe.cam.updateProjectionMatrix(); return; }
   if (loupe.m <= 1 || !renderer.xr.isPresenting || heldObj) return;
   const xc = renderer.xr.getCamera();
   xc.getWorldPosition(loupe.cam.position); xc.getWorldQuaternion(loupe.cam.quaternion); loupe.cam.updateMatrixWorld(true);
@@ -1232,7 +1236,8 @@ if (!siteStored && navigator.geolocation) navigator.geolocation.getCurrentPositi
 $('geo').onclick = () => navigator.geolocation?.getCurrentPosition(p => { lat = +p.coords.latitude.toFixed(3); lon = +p.coords.longitude.toFixed(3); $('lat').value = lat; $('lon').value = lon; store('lat', lat); store('lon', lon); updateSky(); }, () => { $('geo').textContent = 'No fix'; });
 $('toff').oninput = e => { toff = +e.target.value; $('toffv').textContent = (toff >= 0 ? '+' : '') + toff.toFixed(1) + ' h'; updateSky(); };
 $('now').onclick = () => { toff = 0; $('toff').value = 0; $('toffv').textContent = '+0.0 h'; updateSky(); };
-function applyGain() {                                             // slider x headset boost, onto every imagery material
+function applyGain() { const _t0 = performance.now(); try { return applyGainInner(); } finally { const dt = performance.now() - _t0; if (dt > tele.tGain) tele.tGain = dt; } }
+function applyGainInner() {                                        // slider x headset boost, onto every imagery material
   const g = gainVal(), st = stretchVal(), kn = kneeVal();
   skyMat.uniforms.gain.value = g; skyMat.uniforms.knee.value = renderer.xr.isPresenting ? kn : 0.0;
   for (const o of OBJECTS) { o.quad.material.uniforms.gain.value = g; o.quad.material.uniforms.stretch.value = st; o.quad.material.uniforms.knee.value = kn; }
@@ -1537,7 +1542,7 @@ async function start(mode) {
     warmQueue = LABELS.map(L => L.mesh.material.map).filter(t => t && !t.__warm);   // upload label textures gradually
     telemetry('session start ' + mode + ' ' + new Date().toISOString() + ' ' + (navigator.userAgent.match(/OculusBrowser\/[\d.]+/) || navigator.userAgent.slice(0, 60)) + ' fb ' + (qsx.get('fb') || '1.0') + ' fov ' + (qsx.get('fov') || '0.5') + ' xorder ' + (qsx.get('xorder') || 'default'));
     skyMat.uniforms.map.value = dssTex; skyMat.uniforms.black.value.copy(dssBlack);   // DSS2 base in the headset
-    if (!loupe.rt) loupeInit(); try { renderer.compile(scene, loupe.cam); } catch {}       // eyepiece ready: no 50 ms first-use stall
+    if (!loupe.rt) loupeInit(); loupe.warm = true;                                        // first frame: one hidden eyepiece render pays the set-up cost
     xrMode = mode; AE.knee = AE.target = (mode === 'immersive-ar' ? XR.kneeAR : XR.kneeVR); applyGain();
     $('hudAlign').textContent = mode === 'immersive-vr' ? 'Align: north here' : 'Align on Polaris';
     if (mode === 'immersive-vr') setTimeout(() => { alignOn(POLARIS); heard('VR: north (Polaris) set straight ahead; site ' + lat.toFixed(2) + ', ' + lon.toFixed(2) + ' ' + new Date().toLocaleTimeString(), true); }, 800);
@@ -1584,8 +1589,8 @@ renderer.setAnimationLoop(tms => {
       tele.worst = Math.max(tele.worst, perf.worst); tele.sum += perf.sum; tele.n += perf.n;
       if (renderer.xr.isPresenting && tms - tele.at > 10000) {
         tele.at = tms;
-        telemetry(`${xrMode === 'immersive-ar' ? 'AR' : 'VR'} avg ${(tele.sum / Math.max(1, tele.n)).toFixed(1)}ms worst ${tele.worst.toFixed(1)}ms draws ${info.calls} tris ${(info.triangles / 1000).toFixed(0)}k tiles ${HIPS.loaded.size} order ${HIPS.maxOrder} zoom x${loupe.m} labels ${LABELS.filter(L => L.mesh.visible).length} heap ${performance.memory ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + 'MB' : '?'} warm ${warmQueue.length} | max ms: upload ${tele.tUpload.toFixed(1)} enter ${tele.tEnter.toFixed(1)} labels ${tele.tLabels.toFixed(1)} hips ${tele.tHips.toFixed(1)} sky ${tele.tSky.toFixed(1)} loupe ${tele.tLoupe.toFixed(1)}`);
-        tele.worst = 0; tele.sum = 0; tele.n = 0; tele.tEnter = tele.tUpload = tele.tLabels = tele.tHips = tele.tSky = tele.tLoupe = 0;
+        telemetry(`${xrMode === 'immersive-ar' ? 'AR' : 'VR'} avg ${(tele.sum / Math.max(1, tele.n)).toFixed(1)}ms worst ${tele.worst.toFixed(1)}ms draws ${info.calls} tris ${(info.triangles / 1000).toFixed(0)}k tiles ${HIPS.loaded.size} order ${HIPS.maxOrder} zoom x${loupe.m} labels ${LABELS.filter(L => L.mesh.visible).length} heap ${performance.memory ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + 'MB' : '?'} warm ${warmQueue.length} | max ms: upload ${tele.tUpload.toFixed(1)} enter ${tele.tEnter.toFixed(1)} labels ${tele.tLabels.toFixed(1)} hips ${tele.tHips.toFixed(1)} sky ${tele.tSky.toFixed(1)} loupe ${tele.tLoupe.toFixed(1)} render ${tele.tRender.toFixed(1)} strip ${tele.tStrip.toFixed(1)} gain ${tele.tGain.toFixed(1)} js ${tele.tJs.toFixed(1)}`);
+        tele.worst = 0; tele.sum = 0; tele.n = 0; tele.tEnter = tele.tUpload = tele.tLabels = tele.tHips = tele.tSky = tele.tLoupe = tele.tRender = tele.tStrip = tele.tGain = tele.tJs = 0;
       }
       const show = perfShow || (renderer.xr.isPresenting && perf.sessionAt && tms - perf.sessionAt < 15000);
       if (show) { if (renderer.xr.isPresenting) hwSet('msg', txt, '#ffb05a'); else { $('heardDesk').hidden = false; $('heardDesk').textContent = txt; } }   // in XR: strip only
@@ -1623,6 +1628,7 @@ renderer.setAnimationLoop(tms => {
   if (phoneMode) applyOrientation();
   renderer.setClearColor(0x000000, (renderer.xr.isPresenting && renderer.xr.getSession()?.environmentBlendMode !== 'opaque') || (phoneMode && $('cam').srcObject) ? 0 : 1);
   timed('tLoupe', loupeRender);
-  renderer.render(scene, camera);
+  timed('tRender', () => renderer.render(scene, camera));
+  const dtJs = performance.now() - tms; if (dtJs > tele.tJs) tele.tJs = dtJs;   // whole callback (tms = frame timestamp)
 });
 </script>
