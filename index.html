@@ -582,7 +582,8 @@ function updateHips(fwd, now) {
       // tiles already loaded below would stall here, because the intermediate orders are deliberately skipped.
       let ips = HIPS.layers[1].tiles.filter(t => t.centre.dot(g) > Math.cos(Math.min(88, fov * 1.5 + 7.3) * DEG)).map(t => t.ip);
       for (let ord = 4; ord <= layer.order && ips.length; ord++) {
-        const L = HIPS.layers[ord - 2], cone = Math.cos(Math.min(85, fov * 0.75 + 58.6 / (1 << ord)) * DEG), next = [];
+        const deepHere = renderer.xr.isPresenting && !zoomed && ord === HIPS.maxOrder;   // finest level: gaze cone only (headset)
+        const L = HIPS.layers[ord - 2], cone = Math.cos(Math.min(85, (deepHere ? XR.deepCone : fov * 0.75) + 58.6 / (1 << ord)) * DEG), next = [];
         for (const ip of ips) for (let k = 0; k < 4; k++) { const t = tileAt(L, ip * 4 + k); if (t.centre.dot(g) > cone) next.push(t.ip); }
         ips = next;
       }
@@ -592,7 +593,8 @@ function updateHips(fwd, now) {
   want.sort((a, b) => b[0] - a[0]);
   for (const [, t] of want) { if (HIPS.inflight >= HIPS.maxInflight) break; loadTile(t, now); }
   for (const layer of HIPS.layers) {
-    const cap = active.has(layer.order) ? layer.maxLoaded : 0;         // levels the view no longer uses are released
+    const deepCap = renderer.xr.isPresenting && !zoomed && layer.order === HIPS.maxOrder;
+    const cap = active.has(layer.order) ? (deepCap ? Math.min(layer.maxLoaded, 160) : layer.maxLoaded) : 0;   // levels the view no longer uses are released; headset keeps <= 160 finest tiles
     const have = layer.tiles.filter(t => t.mesh);
     if (have.length > cap) {
       for (const t of have.sort((a, b) => a.last - b.last).slice(0, have.length - cap)) {
@@ -623,7 +625,7 @@ function loadTile(t, now) {
     t.mesh.material.uniforms.black.value.set(b[0], b[1], b[2]);
     t.bright = brightLevel(tex.image, b);                                 // for the headset's gaze auto-exposure
     t.mesh.material.uniforms.map.value = tex; t.mesh.visible = $('hips').checked; HIPS.loaded.add(t);
-    const enter = () => { hipsGroup.add(t.mesh); refreshParent(t); };
+    const enter = () => { if (!t.mesh) return; hipsGroup.add(t.mesh); refreshParent(t); };   // may have been evicted while queued
     if (renderer.xr.isPresenting) HIPS.pending.push(enter); else enter();   // headset: spread uploads, <= 2 per frame
     if (HIPS.loaded.size === 1) setHipsCoverage(true);
     if (location.search.includes('debug')) console.log('hips tile', t.layer.order, t.ip, 'loaded', HIPS.loaded.size);
