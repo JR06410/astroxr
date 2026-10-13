@@ -357,6 +357,8 @@ const XR = { labelScale: 2.3, cardScale: 0.1, boostAR: 1.0, boostVR: 1.0, stretc
   // coarsest sky (order 2, ~100"/px) -- soft nebulae. The Quest 3 shows ~19 px/deg, so order 4 (26"/px) around
   // the gaze is what reads as sharp; order 3 backs it, order 2 covers the rest. Cones are set for head turns.
   hipsOrderFov: 10, hipsConeFov: 60 };      // cone 60: load ~49 deg around the gaze, never drop within the hemisphere
+{ const xo = +(new URLSearchParams(location.search).get('xorder') || 0);          // ?xorder=3 -> coarser headset sky (A/B for draw-call cost)
+  if (xo >= 2 && xo <= 8) XR.hipsOrderFov = 3 * 58.6 / Math.pow(2, xo); }
 let xrMode = null;                                             // 'immersive-ar' | 'immersive-vr' | null
 const xrBoost = () => (!renderer.xr.isPresenting ? 1 : xrMode === 'immersive-ar' ? XR.boostAR : XR.boostVR);
 const gainVal = () => +$('gain').value * xrBoost();
