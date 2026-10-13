@@ -356,7 +356,7 @@ const XR = { labelScale: 2.3, cardScale: 0.1, boostAR: 1.0, boostVR: 1.0, stretc
   // The headset's field is fixed at ~90 deg, which the tile picker read as "wide view" and answered with the
   // coarsest sky (order 2, ~100"/px) -- soft nebulae. The Quest 3 shows ~19 px/deg, so order 4 (26"/px) around
   // the gaze is what reads as sharp; order 3 backs it, order 2 covers the rest. Cones are set for head turns.
-  hipsOrderFov: 10, hipsConeFov: 40 };
+  hipsOrderFov: 10, hipsConeFov: 60 };      // cone 60: load ~49 deg around the gaze, never drop within the hemisphere
 let xrMode = null;                                             // 'immersive-ar' | 'immersive-vr' | null
 const xrBoost = () => (!renderer.xr.isPresenting ? 1 : xrMode === 'immersive-ar' ? XR.boostAR : XR.boostVR);
 const gainVal = () => +$('gain').value * xrBoost();
@@ -364,7 +364,12 @@ const stretchVal = () => (renderer.xr.isPresenting ? XR.stretch : XR.stretchDesk
 const AE = { knee: 3.0, target: 3.0, at: 0 };                    // gaze auto-exposure state (headset)
 const kneeVal = () => (!renderer.xr.isPresenting ? 0.0 : AE.knee);   // 0 = power law (desktop)
 function autoExpose(now) {
-  if (!renderer.xr.isPresenting || now - AE.at < 500) return;
+  if (!renderer.xr.isPresenting) return;
+  // ease every frame (time constant ~2 s) so brightness never steps; the target itself is re-measured below
+  const dt = Math.min(0.1, (now - (AE.frameAt || now)) / 1000); AE.frameAt = now;
+  const k = AE.knee + (AE.target - AE.knee) * (1 - Math.exp(-dt / 2.0));
+  if (Math.abs(k - AE.knee) > 0.003) { AE.knee = k; applyGain(); }
+  if (now - AE.at < 500) return;
   AE.at = now;
   // eyepiece at x4 or more: small objects in the field get their PanSTARRS / DSS2 cut-out laid on the sky
   const deep = loupe.m >= 4; hiQuadsVisible(deep && !heldObj);
@@ -383,9 +388,8 @@ function autoExpose(now) {
   // bright >= 0.6 (a nebula core in view) -> knee 1.2, nearly linear; bright <= 0.15 (faint field) -> full lift
   const maxK = xrMode === 'immersive-ar' ? XR.kneeAR : XR.kneeVR;
   const f = Math.min(1, Math.max(0, (bright - 0.15) / 0.45));
-  AE.target = maxK + (1.2 - maxK) * f;
-  const k = AE.knee + (AE.target - AE.knee) * 0.35;                    // ease over ~1.5 s
-  if (Math.abs(k - AE.knee) > 0.02) { AE.knee = k; applyGain(); }
+  const t = maxK + (1.2 - maxK) * f;
+  if (Math.abs(t - AE.target) > 0.25) AE.target = t;                 // hysteresis: small changes in the gaze set are ignored
 }
 // Survey imagery material: subtracts the plate's own sky level (so a cut-out does not sit on the base sky as
 // a lighter box) and feathers the edges over the outer 14% of the field, then adds the result to the sky.
@@ -780,7 +784,7 @@ function hwSet(which, text, color) {
   if (!text) return;
   hw[which + 'Until'] = performance.now() + HW_SHOW_MS;
   const m = label([text], color, 2.0, 56); m.scale.multiplyScalar(0.03);           // 2 deg high at 1.5 m
-  m.position.set(0, which === 'msg' ? -0.30 : -0.40, -1.5); m.renderOrder = 10; m.material.depthTest = false;
+  m.position.set(0, which === 'msg' ? -0.30 : -0.40, -1.5); m.renderOrder = 60; m.material.depthTest = false;
   hudWorld.add(m); hw[which] = m;
 }
 function setHudState(text) { $('hudState').textContent = text; if (renderer.xr.isPresenting) hwSet('state', text, '#b9c1d0'); }
@@ -798,10 +802,13 @@ function loupeInit() {
   loupe.rt.texture.generateMipmaps = true; loupe.rt.texture.minFilter = THREE.LinearMipmapLinearFilter; loupe.rt.texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
   loupe.cam = new THREE.PerspectiveCamera(LOUPE_DEG, 1, 0.05, 400);
   const w = 2 * LOUPE_D * Math.tan(LOUPE_DEG / 2 * DEG);
-  loupe.quad = new THREE.Mesh(new THREE.PlaneGeometry(w, w), new THREE.MeshBasicMaterial({ map: loupe.rt.texture, toneMapped: false, depthTest: false }));
-  loupe.quad.position.set(0, 0, -LOUPE_D); loupe.quad.renderOrder = 5; loupe.quad.visible = false; camera.add(loupe.quad);
+  // transparent:true puts the panel in the transparent pass (after the additive sky and the labels) and a high
+  // renderOrder makes it the last thing drawn there -- as an opaque mesh it was drawn FIRST and the whole sky
+  // and every label were then added on top of it (washed-out, see-through panel)
+  loupe.quad = new THREE.Mesh(new THREE.PlaneGeometry(w, w), new THREE.MeshBasicMaterial({ map: loupe.rt.texture, toneMapped: false, depthTest: false, depthWrite: false, transparent: true, opacity: 1 }));
+  loupe.quad.position.set(0, 0, -LOUPE_D); loupe.quad.renderOrder = 50; loupe.quad.visible = false; camera.add(loupe.quad);
   loupe.ring = new THREE.Mesh(new THREE.RingGeometry(w / 2 * 0.995, w / 2 * 1.02, 96), new THREE.MeshBasicMaterial({ color: 0xffb05a, transparent: true, opacity: 0.8, depthTest: false }));
-  loupe.ring.position.set(0, 0, -LOUPE_D + 0.001); loupe.ring.renderOrder = 6; loupe.ring.visible = false; camera.add(loupe.ring);
+  loupe.ring.position.set(0, 0, -LOUPE_D + 0.001); loupe.ring.renderOrder = 51; loupe.ring.visible = false; camera.add(loupe.ring);
 }
 function loupeSet(m) {
   if (!loupe.rt) loupeInit();
