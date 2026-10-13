@@ -371,7 +371,7 @@ function surveyMaterial() {
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
     fragmentShader: `uniform sampler2D map; uniform vec3 black; uniform float gain; uniform float feather; uniform float dechroma; uniform float stretch; uniform float knee; varying vec2 vUv;
       vec3 asinh3(vec3 x) { return log(x + sqrt(x * x + 1.0)); }
-      void main(){ vec4 c = texture2D(map, vUv);
+      void main(){ vec4 c = texture2D(map, vUv, -0.6);                                  // sharper mip pick when minified
         float a = smoothstep(0.0, feather, vUv.x) * smoothstep(0.0, feather, 1.0 - vUv.x) * smoothstep(0.0, feather, vUv.y) * smoothstep(0.0, feather, 1.0 - vUv.y);
         vec3 v = max(c.rgb - black, 0.0);
         vec3 col = (knee > 0.0 ? asinh3(v * knee) / asinh3(vec3(knee)) : pow(v, vec3(stretch))) * gain * a;   // headset: asinh (lifts faint, never clips); desktop: power law
@@ -1305,10 +1305,16 @@ if (window.self !== window.top) $('alignText').textContent = 'Inside a viewer fr
 // ---------------------------------------------------------------- WebXR sessions
 async function start(mode) {
   const init = { optionalFeatures: ['local-floor', 'hand-tracking', 'dom-overlay'], domOverlay: { root: hud } };
+  // Sharpness in the headset: render above the default framebuffer size (1.25x is the usual choice for fine
+  // detail and text), and keep fixed foveation low -- three.js defaults it to maximum, which blurs everything
+  // away from the centre of view. ?fb=1.5 / ?fov=0.5 to experiment.
+  const qsx = new URLSearchParams(location.search);
+  renderer.xr.setFramebufferScaleFactor(+(qsx.get('fb') || 1.25));
   try {
     const session = await navigator.xr.requestSession(mode, init);
     session.addEventListener('end', () => { xrMode = null; hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); applyGain(); });
     await renderer.xr.setSession(session);
+    try { renderer.xr.setFoveation(+(qsx.get('fov') || 0.2)); } catch {}
     xrMode = mode; applyGain();
     $('hudAlign').textContent = mode === 'immersive-vr' ? 'Align: north here' : 'Align on Polaris';
     if (mode === 'immersive-vr') setTimeout(() => { alignOn(POLARIS); heard('VR: north (Polaris) set straight ahead; site ' + lat.toFixed(2) + ', ' + lon.toFixed(2) + ' ' + new Date().toLocaleTimeString(), true); }, 800);
