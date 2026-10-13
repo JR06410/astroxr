@@ -1454,6 +1454,7 @@ async function start(mode) {
     await renderer.xr.setSession(session);
     try { renderer.xr.setFoveation(+(qsx.get('fov') || 0.5)); } catch {}
     perf.sessionAt = performance.now();
+    telemetry('session start ' + mode + ' ' + new Date().toISOString() + ' ' + (navigator.userAgent.match(/OculusBrowser\/[\d.]+/) || navigator.userAgent.slice(0, 60)) + ' fb ' + (qsx.get('fb') || '1.0') + ' fov ' + (qsx.get('fov') || '0.5') + ' xorder ' + (qsx.get('xorder') || 'default'));
     xrMode = mode; AE.knee = AE.target = (mode === 'immersive-ar' ? XR.kneeAR : XR.kneeVR); applyGain();
     $('hudAlign').textContent = mode === 'immersive-vr' ? 'Align: north here' : 'Align on Polaris';
     if (mode === 'immersive-vr') setTimeout(() => { alignOn(POLARIS); heard('VR: north (Polaris) set straight ahead; site ' + lat.toFixed(2) + ', ' + lon.toFixed(2) + ' ' + new Date().toLocaleTimeString(), true); }, 800);
@@ -1478,6 +1479,15 @@ updateSky();
 const _qFrame = new THREE.Quaternion();
 // ?perf=1 -- frame-time and draw-call readout in the head-locked strip (measure before optimising further)
 const perfOn = true;                                                 // measured always; shown with ?perf=1 or for the first 15 s of a session
+// Telemetry to the dev laptop: nobody can write numbers down inside a headset, and the static host cannot
+// take a write, so during a session one line every 10 s (frame avg/worst, draw calls, tiles, zoom) and any
+// JavaScript error are POSTed to the sink named in telemetry.json (tools/telemetry_server.py behind a
+// Cloudflare quick tunnel; see tools/set_telemetry.py). No file, no telemetry.
+const tele = { url: null, at: 0, worst: 0, sum: 0, n: 0 };
+fetch('telemetry.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(j => { if (j && j.url) tele.url = j.url.replace(/\/$/, '') + '/log'; }).catch(() => {});
+function telemetry(line) { if (!tele.url) return; try { fetch(tele.url, { method: 'POST', body: line, headers: { 'Content-Type': 'text/plain' } }).catch(() => {}); } catch {} }
+window.addEventListener('error', e => telemetry('ERROR ' + (e.message || '') + ' @' + (e.lineno || '') + (e.error && e.error.stack ? ' ' + String(e.error.stack).slice(0, 300) : '')));
+window.addEventListener('unhandledrejection', e => telemetry('REJECT ' + (e.reason && (e.reason.message || e.reason))));
 const perfShow = new URLSearchParams(location.search).get('perf') === '1';
 const perf = { n: 0, sum: 0, worst: 0, lastT: 0, at: 0 };
 renderer.setAnimationLoop(tms => {
@@ -1488,6 +1498,12 @@ renderer.setAnimationLoop(tms => {
       const info = renderer.info.render;
       const txt = `frame avg ${(perf.sum / perf.n).toFixed(1)} ms  worst ${perf.worst.toFixed(1)} ms  draws ${info.calls}  tris ${(info.triangles / 1000).toFixed(0)}k  tiles ${HIPS.loaded.size}`;
       perf.last = txt;
+      tele.worst = Math.max(tele.worst, perf.worst); tele.sum += perf.sum; tele.n += perf.n;
+      if (renderer.xr.isPresenting && tms - tele.at > 10000) {
+        tele.at = tms;
+        telemetry(`${xrMode === 'immersive-ar' ? 'AR' : 'VR'} avg ${(tele.sum / Math.max(1, tele.n)).toFixed(1)}ms worst ${tele.worst.toFixed(1)}ms draws ${info.calls} tris ${(info.triangles / 1000).toFixed(0)}k tiles ${HIPS.loaded.size} order ${HIPS.maxOrder} zoom x${loupe.m} labels ${LABELS.filter(L => L.mesh.visible).length}`);
+        tele.worst = 0; tele.sum = 0; tele.n = 0;
+      }
       const show = perfShow || (renderer.xr.isPresenting && perf.sessionAt && tms - perf.sessionAt < 15000);
       if (show) { if (renderer.xr.isPresenting) hwSet('msg', txt, '#ffb05a'); else { $('heardDesk').hidden = false; $('heardDesk').textContent = txt; } }
       perf.at = tms; perf.n = 0; perf.sum = 0; perf.worst = 0;
