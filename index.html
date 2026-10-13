@@ -385,7 +385,8 @@ let xrMode = null;                                             // 'immersive-ar'
 const xrBoost = () => (!renderer.xr.isPresenting ? 1 : xrMode === 'immersive-ar' ? XR.boostAR : XR.boostVR);
 const gainVal = () => +$('gain').value * xrBoost();
 const stretchVal = () => (renderer.xr.isPresenting ? XR.stretch : XR.stretchDesk);
-const AE = { knee: 3.0, target: 3.0, at: 0 };                    // gaze auto-exposure state (headset)
+const AE = { knee: 3.0, target: 3.0, at: 0, quadsOn: false };   // gaze auto-exposure state (headset)
+const _v3 = new THREE.Vector3();
 const kneeVal = () => (!renderer.xr.isPresenting ? 0.0 : AE.knee);   // 0 = power law (desktop)
 function autoExpose(now) {
   if (!renderer.xr.isPresenting) return;
@@ -397,6 +398,18 @@ function autoExpose(now) {
   AE.at = now;
   // eyepiece at x4 or more: small objects in the field get their PanSTARRS / DSS2 cut-out laid on the sky
   const deep = loupe.m >= 4; hiQuadsVisible(deep && !heldObj);
+  const zq = loupe.m >= 2 && !heldObj;                                 // bundled cut-outs while zoomed: instant, until hi-res arrives
+  if (zq || AE.quadsOn) {
+    const f = fwdOf().clone(), cosQ = Math.cos((LOUPE_DEG / loupe.m / 2 + 2) * DEG);
+    for (const o of OBJECTS) {
+      const on = zq && !o.hiQuad && o.quad.getWorldPosition(_v3).sub(eyeOf()).normalize().dot(f) > cosQ;
+      if (on && !o.loaded) loadTex(o);
+      const m = o.quad.material;
+      if (on && m.blending !== THREE.NormalBlending) { m.blending = THREE.NormalBlending; m.uniforms.replace.value = 1.0; m.needsUpdate = true; }
+      o.quad.visible = on && !!m.uniforms.map.value;
+    }
+    AE.quadsOn = zq;
+  }
   if (deep) {
     const f = fwdOf().clone(), cosF = Math.cos((LOUPE_DEG / loupe.m / 2 + 1.5) * DEG); let busy = 0;
     trimHiQuads(f);
@@ -1535,7 +1548,7 @@ async function start(mode) {
   renderer.xr.setFramebufferScaleFactor(+(qsx.get('fb') || 1.0));     // 1.25 cost frames on the Quest 3 (text ghosting = below 72 Hz)
   try {
     const session = await navigator.xr.requestSession(mode, init);
-    session.addEventListener('end', () => { xrMode = null; skyMat.uniforms.map.value = skyTex; skyMat.uniforms.black.value.set(0, 0, 0); skyMat.uniforms.knee.value = 0; while (HIPS.pending.length) HIPS.pending.shift()(); hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); applyGain(); });
+    session.addEventListener('end', () => { xrMode = null; AE.quadsOn = false; for (const o of OBJECTS) { const m = o.quad.material; if (m.blending !== THREE.AdditiveBlending) { m.blending = THREE.AdditiveBlending; m.uniforms.replace.value = 0.0; m.needsUpdate = true; } o.quad.visible = o.loaded && !!m.uniforms.map.value && !o.covered && !(HIPS.enabled && HIPS.loaded.size > 0); } skyMat.uniforms.map.value = skyTex; skyMat.uniforms.black.value.set(0, 0, 0); skyMat.uniforms.knee.value = 0; while (HIPS.pending.length) HIPS.pending.shift()(); hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); applyGain(); });
     await renderer.xr.setSession(session);
     try { renderer.xr.setFoveation(+(qsx.get('fov') || 0.5)); } catch {}
     perf.sessionAt = performance.now();
