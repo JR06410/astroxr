@@ -163,7 +163,7 @@
     <button id="hudExit">Exit</button>
   </div>
   <div id="heard" hidden></div>
-  <div id="legend">Trigger: pick · <b>A</b> hold 1 s: align north here · <b>B</b>: return · stick push forward/back: zoom step · say "align"</div>
+  <div id="legend">Trigger: pick · <b>A</b> hold 1 s: align north here · <b>B</b>: return · stick push forward/back: zoom x2 / x0.5 (eyepiece) · say "align"</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js"></script>
@@ -531,8 +531,9 @@ function updateHips(fwd, now) {
   if (!HIPS.enabled) return;
   skyInv.setFromMatrix4(sky.matrixWorld).invert();                     // gaze in the sky's own (equatorial) frame
   const g = fwd.clone().applyMatrix3(skyInv).normalize();
-  const fov = renderer.xr.isPresenting ? XR.hipsConeFov : camera.fov;
-  const fovOrd = renderer.xr.isPresenting ? XR.hipsOrderFov : camera.fov;
+  const zoomed = renderer.xr.isPresenting && loupe.m > 1;
+  const fov = renderer.xr.isPresenting ? (zoomed ? Math.max(6, LOUPE_DEG / loupe.m * 1.5) : XR.hipsConeFov) : camera.fov;
+  const fovOrd = renderer.xr.isPresenting ? (zoomed ? LOUPE_DEG / loupe.m : XR.hipsOrderFov) : camera.fov;
   HIPS.maxOrder = Math.max(2, Math.min(8, Math.round(Math.log2(58.6 / Math.max(0.12, fovOrd / 3)))));
   // Only three levels are ever active: the order the view justifies, one below it as backing while tiles arrive,
   // and order 2 for the rest of the sky. The intermediate orders are skipped entirely -- at a 1 degree field there
@@ -770,6 +771,41 @@ function hwSet(which, text, color) {
   hudWorld.add(m); hw[which] = m;
 }
 function setHudState(text) { $('hudState').textContent = text; if (renderer.xr.isPresenting) hwSet('state', text, '#b9c1d0'); }
+// ---------------------------------------------------------------- virtual eyepiece (headset zoom)
+// A headset cannot narrow its field of view, so zoom is done the way VR binoculars are: a second camera with a
+// field of LOUPE_DEG / m renders the sky into a texture each frame, shown on a head-locked panel LOUPE_DEG wide
+// in front of the eye -- the sky around the reticle appears m times larger, with the finer HiPS orders
+// streaming in for the narrower field (updateHips sees the eyepiece field). The sky around the panel stays
+// visible for context. UI groups are hidden for the eyepiece render so labels and HUD are not magnified.
+const LOUPE_DEG = 36, LOUPE_D = 1.5;
+const loupe = { m: 1, rt: null, cam: null, quad: null, ring: null };
+function loupeInit() {
+  loupe.rt = new THREE.WebGLRenderTarget(1024, 1024, { samples: 0 }); loupe.rt.texture.colorSpace = THREE.SRGBColorSpace;
+  loupe.cam = new THREE.PerspectiveCamera(LOUPE_DEG, 1, 0.05, 400);
+  const w = 2 * LOUPE_D * Math.tan(LOUPE_DEG / 2 * DEG);
+  loupe.quad = new THREE.Mesh(new THREE.PlaneGeometry(w, w), new THREE.MeshBasicMaterial({ map: loupe.rt.texture, toneMapped: false, depthTest: false }));
+  loupe.quad.position.set(0, 0, -LOUPE_D); loupe.quad.renderOrder = 5; loupe.quad.visible = false; camera.add(loupe.quad);
+  loupe.ring = new THREE.Mesh(new THREE.RingGeometry(w / 2 * 0.995, w / 2 * 1.02, 96), new THREE.MeshBasicMaterial({ color: 0xffb05a, transparent: true, opacity: 0.8, depthTest: false }));
+  loupe.ring.position.set(0, 0, -LOUPE_D + 0.001); loupe.ring.renderOrder = 6; loupe.ring.visible = false; camera.add(loupe.ring);
+}
+function loupeSet(m) {
+  if (!loupe.rt) loupeInit();
+  loupe.m = Math.min(16, Math.max(1, m));
+  loupe.cam.fov = LOUPE_DEG / loupe.m; loupe.cam.updateProjectionMatrix();
+  loupe.quad.visible = loupe.ring.visible = loupe.m > 1;
+  prefetch();                                                        // finer tiles for the narrower field, now
+  heard(loupe.m > 1 ? 'zoom x' + loupe.m + '  (' + (LOUPE_DEG / loupe.m).toFixed(1) + '\u00b0 field)' : 'zoom off', true);
+}
+function loupeRender() {
+  if (loupe.m <= 1 || !renderer.xr.isPresenting) return;
+  const xc = renderer.xr.getCamera();
+  xc.getWorldPosition(loupe.cam.position); xc.getWorldQuaternion(loupe.cam.quaternion); loupe.cam.updateMatrixWorld(true);
+  const hide = [labels, horizon, reticle, guide, hudWorld, held, loupe.quad, loupe.ring, hiRing, frame];
+  const was = hide.map(o => o.visible); hide.forEach(o => { o.visible = false; });
+  renderer.xr.enabled = false; renderer.setRenderTarget(loupe.rt); renderer.render(scene, loupe.cam);
+  renderer.setRenderTarget(null); renderer.xr.enabled = true;
+  hide.forEach((o, i) => { o.visible = was[i]; });
+}
 // ---------------------------------------------------------------- pull an object closer
 const held = new THREE.Group(); camera.add(held); held.visible = false;
 let heldObj = null;
@@ -1099,17 +1135,10 @@ function prefetch() {
 let heldZoom = 1;                                                   // headset: magnification of the opened photograph
 function zoom(k) {
   if (renderer.xr.isPresenting) {
-    // No camera field to change in a headset. Zoom in opens the selected object as the full-resolution
-    // photograph, then magnifies it (x, y only: scaling z would just move it away at the same size).
-    if (!heldObj) {
-      if (k >= 1) { heard('nothing open to zoom out of', false); return; }
-      const o = objectInView() || target;                            // headset: open what the reticle is on
-      if (o) { hold(o); heard('opened ' + o.name, true); } else heard('look at an object, then zoom in', false);
-      return;
-    }
-    heldZoom = Math.min(4, Math.max(1, heldZoom / k));
-    held.scale.set(heldZoom, heldZoom, 1);
-    heard('magnified x' + heldZoom.toFixed(1), true);
+    // Headset: magnify the sky around the reticle through the virtual eyepiece (x2 per step, up to x16).
+    // An open photograph is magnified instead (x, y only: scaling z would just move it away at the same size).
+    if (heldObj) { heldZoom = Math.min(4, Math.max(1, heldZoom / k)); held.scale.set(heldZoom, heldZoom, 1); heard('magnified x' + heldZoom.toFixed(1), true); return; }
+    loupeSet(k < 1 ? loupe.m * 2 : loupe.m / 2);
     return;
   }
   const was = camera.fov; setFov(camera.fov * k);
@@ -1117,7 +1146,7 @@ function zoom(k) {
   if (was >= TRACK_FOV && camera.fov < TRACK_FOV) setFrozen(true);
   if (was < TRACK_FOV && camera.fov >= TRACK_FOV) setFrozen(false);
 }
-function zoomReturn() { release(); clearSelection(); setFrozen(false); setFov(70); }
+function zoomReturn() { release(); clearSelection(); setFrozen(false); setFov(70); if (loupe.m > 1) loupeSet(1); }
 let drag = null, yawCam = 0, pitchCam = 20 * DEG;
 const setCam = () => { camera.rotation.set(0, 0, 0, 'YXZ'); camera.rotation.y = -yawCam; camera.rotation.x = pitchCam; };
 function lookAt(obj) {
@@ -1408,6 +1437,7 @@ renderer.setAnimationLoop(tms => {
   }
   if (phoneMode) applyOrientation();
   renderer.setClearColor(0x000000, (renderer.xr.isPresenting && renderer.xr.getSession()?.environmentBlendMode !== 'opaque') || (phoneMode && $('cam').srcObject) ? 0 : 1);
+  loupeRender();
   renderer.render(scene, camera);
 });
 </script>
