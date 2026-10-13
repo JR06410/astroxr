@@ -691,19 +691,33 @@ $('hudState').onclick = () => { hudForce = !hudForce; updateAlignState(); };
 function updateAlignState() {
   const el = $('align-state'), tx = $('alignText');
   $('hudAlign').hidden = false;
-  if (!aligned) { el.classList.remove('ok'); tx.textContent = phoneMode ? 'Compass only' : 'Not aligned'; $('hudState').textContent = phoneMode ? 'Compass only — put Polaris in the reticle and tap Align' : (xrMode === 'immersive-vr' ? 'Not aligned — face north and hold A (or say "align")' : 'Not aligned — reticle on Polaris, hold A (or say "align")'); return; }
+  if (!aligned) { el.classList.remove('ok'); tx.textContent = phoneMode ? 'Compass only' : 'Not aligned'; setHudState(phoneMode ? 'Compass only — put Polaris in the reticle and tap Align' : (xrMode === 'immersive-vr' ? 'Not aligned — face north and hold A (or say "align")' : 'Not aligned — reticle on Polaris, hold A (or say "align")')); return; }
   const min = Math.round((Date.now() - aligned.at) / 60000);
   const stale = min >= 10;
   el.classList.toggle('ok', !stale);
   $('hudAlign').hidden = !stale && !hudForce;                     // aligned: the button steps aside until it goes stale
   const s = `Aligned on ${aligned.on} · ${min < 1 ? `just now (turned ${aligned.delta >= 0 ? '+' : ''}${(aligned.delta || 0).toFixed(1)}°)` : min + ' min ago'}${stale ? ' · re-align' : ''}`;
-  tx.textContent = s; $('hudState').textContent = s;
+  tx.textContent = s; setHudState(s);
 }
 const POLARIS = 'Polaris';
 $('alignBtn').onclick = () => alignOn(POLARIS);
 $('hudAlign').onclick = () => alignHere('button');
 $('resetYaw').onclick = () => { yaw = 0; aligned = null; store('yaw', 0); store('aligned', null); updateSky(); };
 
+// ---------------------------------------------------------------- head-locked message strip (headset)
+// The dom-overlay HUD sits in the browser's quad, which is out of view as soon as you look around. These two
+// lines ride with the head just below the reticle: the alignment state, and a transient message (what voice
+// heard, the align countdown, confirmations). Rendered as canvas text like the sky labels.
+const hudWorld = new THREE.Group(); camera.add(hudWorld); hudWorld.visible = false;
+const hw = { state: null, msg: null, msgUntil: 0 };
+function hwSet(which, text, color) {
+  if (hw[which]) { hudWorld.remove(hw[which]); hw[which].material.map.dispose(); hw[which].material.dispose(); hw[which] = null; }
+  if (!text) return;
+  const m = label([text], color, 2.0, 56); m.scale.multiplyScalar(0.03);           // 2 deg high at 1.5 m
+  m.position.set(0, which === 'msg' ? -0.30 : -0.40, -1.5); m.renderOrder = 10; m.material.depthTest = false;
+  hudWorld.add(m); hw[which] = m;
+}
+function setHudState(text) { setHudState(text); if (renderer.xr.isPresenting) hwSet('state', text, '#b9c1d0'); }
 // ---------------------------------------------------------------- pull an object closer
 const held = new THREE.Group(); camera.add(held); held.visible = false;
 let heldObj = null;
@@ -862,7 +876,7 @@ function pollControllers(tms) {
   if (aDown) {
     if (!alignHeld) { alignHeld = tms; alignDone = false; }
     const left = ALIGN_HOLD_MS - (tms - alignHeld);
-    if (left > 0) $('hudState').textContent = 'Hold… aligning in ' + (left / 1000).toFixed(1) + ' s (release to cancel)';
+    if (left > 0) setHudState('Hold… aligning in ' + (left / 1000).toFixed(1) + ' s (release to cancel)');
     else if (!alignDone) { alignDone = true; alignHere('A held'); }
   } else if (alignHeld) { alignHeld = 0; if (!alignDone) updateAlignState(); }
   // B / Y: return (close the photo, else back to the wide view) -- on release, once
@@ -947,7 +961,7 @@ function updateGuide(tms) {
   guideText.scale.copy(guideText.userData.base).multiplyScalar(k);
   // text sits inside the chevron (towards the centre) when pointing, or just under the centre when the target is in view
   guideText.position.set(inView ? 0 : dir.x * (rad - 0.22 * k), inView ? -edge * 0.85 : dir.y * (rad - 0.22 * k) - 0.1 * k, -D);
-  if (!aligned && $('hudState')) $('hudState').textContent = 'Align on Polaris first for accurate guidance';
+  if (!aligned && $('hudState')) setHudState('Align on Polaris first for accurate guidance');
 }
 
 // ---------------------------------------------------------------- object strip (desktop)
@@ -1095,6 +1109,7 @@ const VOICE = [
 const GRAMMAR = ['align', 'zoom in', 'zoom out', 'closer', 'wider', 'return', 'reset', 'freeze', 'live', '[unk]'];
 function heard(text, ok) {
   console.log('[voice]', ok ? 'ok' : '??', text);
+  if (renderer.xr.isPresenting) { hwSet('msg', text, ok ? '#ffb05a' : '#8e97a8'); hw.msgUntil = performance.now() + 3000; }
   const el = $(renderer.xr.isPresenting ? 'heard' : 'heardDesk');
   el.hidden = false; el.textContent = (ok ? 'mic: ' : 'mic ? ') + text; el.style.color = ok ? '' : 'var(--muted)';
   clearTimeout(heard.t); heard.t = setTimeout(() => { el.hidden = true; }, 2500);
@@ -1240,7 +1255,7 @@ async function startPhone() {
     updateSky();
   } catch (err) { notice('Phone AR failed: ' + err.message + (window.self !== window.top ? ' — open the page outside the viewer (full-page URL)' : '')); }
 }
-function notice(msg) { $('xrhint').textContent = msg; $('alignText').textContent = msg; $('hudState').textContent = msg; hud.style.display = 'flex'; }
+function notice(msg) { $('xrhint').textContent = msg; $('alignText').textContent = msg; setHudState(msg); hud.style.display = 'flex'; }
 function stopPhone() {
   phoneMode = false; orient = null;
   window.removeEventListener('deviceorientationabsolute', onOrient, true); window.removeEventListener('deviceorientation', onOrient, true);
@@ -1281,7 +1296,8 @@ let last = 0, lastL = 0;
 updateSky();
 renderer.setAnimationLoop(tms => {
   if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
-  if (renderer.xr.isPresenting) pollControllers(tms);
+  if (renderer.xr.isPresenting) { pollControllers(tms); hudWorld.visible = true; if (hw.msg && tms > hw.msgUntil) hwSet('msg', ''); }
+  else if (hudWorld.visible) { hudWorld.visible = false; hwSet('msg', ''); }
   const eye = eyeOf();
   horizon.position.copy(eye); sky.matrix.setPosition(eye);        // sky and horizon ride with the eye: everything is at infinity
   // The sky really does rotate (15 deg/hour), so at a narrow field the view drifts off an object within a minute.
