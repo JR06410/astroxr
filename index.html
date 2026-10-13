@@ -163,7 +163,7 @@
     <button id="hudExit">Exit</button>
   </div>
   <div id="heard" hidden></div>
-  <div id="legend">Trigger: pick · <b>A</b> hold 1 s: align north here · <b>B</b>: return · stick up/down: zoom · say "align"</div>
+  <div id="legend">Trigger: pick · <b>A</b> hold 1 s: align north here · <b>B</b>: return · stick push forward/back: zoom step · say "align"</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js"></script>
@@ -361,7 +361,21 @@ let xrMode = null;                                             // 'immersive-ar'
 const xrBoost = () => (!renderer.xr.isPresenting ? 1 : xrMode === 'immersive-ar' ? XR.boostAR : XR.boostVR);
 const gainVal = () => +$('gain').value * xrBoost();
 const stretchVal = () => (renderer.xr.isPresenting ? XR.stretch : XR.stretchDesk);
-const kneeVal = () => (!renderer.xr.isPresenting ? 0.0 : xrMode === 'immersive-ar' ? XR.kneeAR : XR.kneeVR);   // 0 = power law
+const AE = { knee: 3.0, target: 3.0, at: 0 };                    // gaze auto-exposure state (headset)
+const kneeVal = () => (!renderer.xr.isPresenting ? 0.0 : AE.knee);   // 0 = power law (desktop)
+function autoExpose(now) {
+  if (!renderer.xr.isPresenting || now - AE.at < 500) return;
+  AE.at = now;
+  const g = fwdOf().clone().applyMatrix3(skyInv).normalize();        // gaze in the sky frame (skyInv is kept by updateHips)
+  const near = Math.cos(25 * DEG); let bright = 0;
+  for (const t of HIPS.loaded) if (t.bright != null && t.layer.order >= 3 && t.centre.dot(g) > near) bright = Math.max(bright, t.bright);
+  // bright >= 0.6 (a nebula core in view) -> knee 1.2, nearly linear; bright <= 0.15 (faint field) -> full lift
+  const maxK = xrMode === 'immersive-ar' ? XR.kneeAR : XR.kneeVR;
+  const f = Math.min(1, Math.max(0, (bright - 0.15) / 0.45));
+  AE.target = maxK + (1.2 - maxK) * f;
+  const k = AE.knee + (AE.target - AE.knee) * 0.35;                    // ease over ~1.5 s
+  if (Math.abs(k - AE.knee) > 0.02) { AE.knee = k; applyGain(); }
+}
 // Survey imagery material: subtracts the plate's own sky level (so a cut-out does not sit on the base sky as
 // a lighter box) and feathers the edges over the outer 14% of the field, then adds the result to the sky.
 function surveyMaterial() {
@@ -390,6 +404,12 @@ function skyLevel(img) {                         // 25th percentile of the borde
   g.drawImage(img, 0, 0, n, n); const d = g.getImageData(0, 0, n, n).data; const ch = [[], [], []];
   for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (x < 4 || y < 4 || x >= n - 4 || y >= n - 4) { const i = (y * n + x) * 4; ch[0].push(d[i]); ch[1].push(d[i + 1]); ch[2].push(d[i + 2]); }
   return ch.map(v => { v.sort((a, b) => a - b); return 0.85 * v[Math.floor(v.length * 0.12)] / 255; });   // just under the sky level
+}
+function brightLevel(img, black) {                 // 99th percentile luminance above the sky, 0..1
+  const c = document.createElement('canvas'); const n = 64; c.width = c.height = n; const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(img, 0, 0, n, n); const d = g.getImageData(0, 0, n, n).data; const v = new Float32Array(n * n);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) v[j] = Math.max(0, 0.299 * d[i] / 255 - black[0]) + Math.max(0, 0.587 * d[i + 1] / 255 - black[1]) + Math.max(0, 0.114 * d[i + 2] / 255 - black[2]);
+  v.sort(); return v[Math.floor(v.length * 0.99)];
 }
 function loadTex(o) {
   if (o.loaded) return; o.loaded = true;
@@ -577,6 +597,7 @@ function loadTile(t, now) {
     // entirely inside a bright nebula measures the nebula as "sky" and the mosaic shows as bright/dark patches
     const b = t.layer.order <= 4 ? skyLevel(tex.image) : [0.04, 0.04, 0.04];
     t.mesh.material.uniforms.black.value.set(b[0], b[1], b[2]);
+    t.bright = brightLevel(tex.image, b);                                 // for the headset's gaze auto-exposure
     t.mesh.material.uniforms.map.value = tex; t.mesh.visible = $('hips').checked; hipsGroup.add(t.mesh); HIPS.loaded.add(t);
     refreshParent(t);
     if (HIPS.loaded.size === 1) setHipsCoverage(true);
@@ -888,7 +909,7 @@ function select() {                              // trigger / pinch / click: PIC
 // the reticle is on the real Polaris; in VR it is the owner declaring "this way is north". The HUD button
 // and the voice command do the same thing at once.
 const ALIGN_HOLD_MS = 1000;
-let alignHeld = 0, alignDone = false, lastZoomPush = 0, bWas = false;
+let alignHeld = 0, alignDone = false, bWas = false, stickWas = false;
 function alignHere(why) {
   alignOn(POLARIS);
   heard((xrMode === 'immersive-vr' ? 'north set here' : 'aligned on Polaris') + (why ? ' (' + why + ')' : ''), true);
@@ -906,7 +927,7 @@ function pollControllers(tms) {
     if (down.length && tms - (pollControllers.lastLog || 0) > 400) { pollControllers.lastLog = tms; heard((src.handedness || '?') + ' pressed ' + down.join(',') + (gp.axes.length >= 4 ? '  stick ' + gp.axes[2].toFixed(1) + ',' + gp.axes[3].toFixed(1) : ''), true); }
     if (b[4] && b[4].pressed) aDown = true;                          // xr-standard: 4 = A / X, 5 = B / Y
     if (b[5] && b[5].pressed) bDown = true;
-    if (src.handedness === 'right' && gp.axes.length >= 4) stickY = gp.axes[3];
+    if (gp.axes.length >= 4 && Math.abs(gp.axes[3]) > Math.abs(stickY)) stickY = gp.axes[3];   // either stick
   }
   // A / X: hold to align
   if (aDown) {
@@ -919,7 +940,9 @@ function pollControllers(tms) {
   if (bDown && !bWas) { if (heldObj) release(); else zoomReturn(); }
   bWas = bDown;
   // right stick up / down: one zoom step per push (deadzone, 350 ms repeat)
-  if (Math.abs(stickY) > 0.6 && tms - lastZoomPush > 350) { lastZoomPush = tms; zoom(stickY < 0 ? 1 / 1.6 : 1.6); }
+  // one zoom step per push: forward = in, back = out; the stick must come back to centre before the next
+  if (Math.abs(stickY) > 0.6) { if (!stickWas) { stickWas = true; zoom(stickY < 0 ? 1 / 1.6 : 1.6); } }
+  else if (Math.abs(stickY) < 0.3) stickWas = false;
 }
 addEventListener('pointerup', e => { if (phoneMode && drag && !drag[4] && e.target === renderer.domElement) select(); });   // phone: tap = grab/release
 for (let i = 0; i < 2; i++) { const c = renderer.xr.getController(i); c.addEventListener('selectstart', select); scene.add(c); }
@@ -1315,7 +1338,7 @@ async function start(mode) {
     session.addEventListener('end', () => { xrMode = null; hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); applyGain(); });
     await renderer.xr.setSession(session);
     try { renderer.xr.setFoveation(+(qsx.get('fov') || 0.2)); } catch {}
-    xrMode = mode; applyGain();
+    xrMode = mode; AE.knee = AE.target = (mode === 'immersive-ar' ? XR.kneeAR : XR.kneeVR); applyGain();
     $('hudAlign').textContent = mode === 'immersive-vr' ? 'Align: north here' : 'Align on Polaris';
     if (mode === 'immersive-vr') setTimeout(() => { alignOn(POLARIS); heard('VR: north (Polaris) set straight ahead; site ' + lat.toFixed(2) + ', ' + lon.toFixed(2) + ' ' + new Date().toLocaleTimeString(), true); }, 800);
     hud.style.display = 'flex'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = true);
@@ -1356,7 +1379,7 @@ renderer.setAnimationLoop(tms => {
     else if (tms - lastL > 500) { placeLabels(); lastL = tms; }
   } else if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
   if (renderer.xr.isPresenting) {
-    pollControllers(tms); hudWorld.visible = true;
+    pollControllers(tms); hudWorld.visible = true; autoExpose(tms);
     if (hw.msg && tms > hw.msgUntil) hwSet('msg', '');
     if (hw.state && tms > hw.stateUntil && !alignHeld) hwSet('state', '');   // the countdown keeps refreshing it
   }
