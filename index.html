@@ -705,8 +705,11 @@ function alignOn(name) {
   const fwd = fwdOf(); const azCam = Math.atan2(fwd.x, -fwd.z) / DEG;
   const p = target.getWorldPosition(new THREE.Vector3()).sub(eyeOf());
   const azT = Math.atan2(p.x, -p.z) / DEG;
-  const delta = ((azCam - azT + 540) % 360) - 180;
-  yaw = ((yaw + delta + 540) % 360) - 180;
+  // Three.js Matrix4.makeRotationY(+t) maps north (0,0,-1) to (-sin t, 0, -cos t): a POSITIVE yaw turns the
+  // sky toward the WEST, i.e. azimuths decrease. To move the drawn target from azT onto the heading azCam
+  // the yaw must change by (azT - azCam). It was added the other way, which put Polaris on the mirror side.
+  const delta = ((azCam - azT + 540) % 360) - 180;                   // how far the target must move, +east
+  yaw = ((yaw - delta + 540) % 360) - 180;
   aligned = { on: name, at: Date.now(), delta }; hudForce = false;
   store('yaw', yaw); store('aligned', aligned); updateSky();
 }
