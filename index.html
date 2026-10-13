@@ -1445,12 +1445,13 @@ async function start(mode) {
   // detail and text), and keep fixed foveation low -- three.js defaults it to maximum, which blurs everything
   // away from the centre of view. ?fb=1.5 / ?fov=0.5 to experiment.
   const qsx = new URLSearchParams(location.search);
-  renderer.xr.setFramebufferScaleFactor(+(qsx.get('fb') || 1.25));
+  renderer.xr.setFramebufferScaleFactor(+(qsx.get('fb') || 1.0));     // 1.25 cost frames on the Quest 3 (text ghosting = below 72 Hz)
   try {
     const session = await navigator.xr.requestSession(mode, init);
     session.addEventListener('end', () => { xrMode = null; hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); applyGain(); });
     await renderer.xr.setSession(session);
-    try { renderer.xr.setFoveation(+(qsx.get('fov') || 0.2)); } catch {}
+    try { renderer.xr.setFoveation(+(qsx.get('fov') || 0.5)); } catch {}
+    perf.sessionAt = performance.now();
     xrMode = mode; AE.knee = AE.target = (mode === 'immersive-ar' ? XR.kneeAR : XR.kneeVR); applyGain();
     $('hudAlign').textContent = mode === 'immersive-vr' ? 'Align: north here' : 'Align on Polaris';
     if (mode === 'immersive-vr') setTimeout(() => { alignOn(POLARIS); heard('VR: north (Polaris) set straight ahead; site ' + lat.toFixed(2) + ', ' + lon.toFixed(2) + ' ' + new Date().toLocaleTimeString(), true); }, 800);
@@ -1474,7 +1475,8 @@ let last = 0, lastL = 0;
 updateSky();
 const _qFrame = new THREE.Quaternion();
 // ?perf=1 -- frame-time and draw-call readout in the head-locked strip (measure before optimising further)
-const perfOn = new URLSearchParams(location.search).get('perf') === '1';
+const perfOn = true;                                                 // measured always; shown with ?perf=1 or for the first 15 s of a session
+const perfShow = new URLSearchParams(location.search).get('perf') === '1';
 const perf = { n: 0, sum: 0, worst: 0, lastT: 0, at: 0 };
 renderer.setAnimationLoop(tms => {
   if (perfOn) {
@@ -1483,7 +1485,9 @@ renderer.setAnimationLoop(tms => {
     if (tms - perf.at > 1000 && perf.n) {
       const info = renderer.info.render;
       const txt = `frame avg ${(perf.sum / perf.n).toFixed(1)} ms  worst ${perf.worst.toFixed(1)} ms  draws ${info.calls}  tris ${(info.triangles / 1000).toFixed(0)}k  tiles ${HIPS.loaded.size}`;
-      if (renderer.xr.isPresenting) hwSet('msg', txt, '#ffb05a'); else { $('heardDesk').hidden = false; $('heardDesk').textContent = txt; }
+      perf.last = txt;
+      const show = perfShow || (renderer.xr.isPresenting && perf.sessionAt && tms - perf.sessionAt < 15000);
+      if (show) { if (renderer.xr.isPresenting) hwSet('msg', txt, '#ffb05a'); else { $('heardDesk').hidden = false; $('heardDesk').textContent = txt; } }
       perf.at = tms; perf.n = 0; perf.sum = 0; perf.worst = 0;
     }
   }
