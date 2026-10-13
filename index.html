@@ -163,7 +163,7 @@
     <button id="hudExit">Exit</button>
   </div>
   <div id="heard" hidden></div>
-  <div id="legend">Trigger: pick · <b>A</b> hold 1 s: align north here · <b>B</b>: return · stick push forward/back: zoom x2 / x0.5 (eyepiece) · say "align"</div>
+  <div id="legend">Trigger: pick · <b>A</b> hold 1 s: align north here · <b>B</b>: return · stick push forward/back or click right/left: zoom x2 / x0.5 (eyepiece) · say "align"</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js"></script>
@@ -802,8 +802,9 @@ function loupeRender() {
   xc.getWorldPosition(loupe.cam.position); xc.getWorldQuaternion(loupe.cam.quaternion); loupe.cam.updateMatrixWorld(true);
   const hide = [labels, horizon, reticle, guide, hudWorld, held, loupe.quad, loupe.ring, hiRing, frame];
   const was = hide.map(o => o.visible); hide.forEach(o => { o.visible = false; });
-  renderer.xr.enabled = false; renderer.setRenderTarget(loupe.rt); renderer.render(scene, loupe.cam);
-  renderer.setRenderTarget(null); renderer.xr.enabled = true;
+  try { renderer.xr.enabled = false; renderer.setRenderTarget(loupe.rt); renderer.render(scene, loupe.cam); }
+  catch (e) { console.error('[loupe]', e); if (!loupe.err) { loupe.err = true; heard('eyepiece render failed: ' + (e && e.message || e), false); } loupe.m = 1; loupe.quad.visible = loupe.ring.visible = false; }
+  finally { renderer.setRenderTarget(null); renderer.xr.enabled = true; }
   hide.forEach((o, i) => { o.visible = was[i]; });
 }
 // ---------------------------------------------------------------- pull an object closer
@@ -946,14 +947,14 @@ function select() {                              // trigger / pinch / click: PIC
 // and the voice command do the same thing at once.
 const ALIGN_HOLD_MS = 1000;
 let alignHeld = 0, alignDone = false, bWas = false, stickWas = false;
-const stick = { dir: 0, since: 0, lastAt: 0, lastDir: 0 };
+const stick = { dir: 0, since: 0, lastAt: 0, lastDir: 0, clickRWas: false, clickLWas: false, logAt: 0 };
 function alignHere(why) {
   alignOn(POLARIS);
   heard((xrMode === 'immersive-vr' ? 'north set here' : 'aligned on Polaris') + (why ? ' (' + why + ')' : ''), true);
 }
 function pollControllers(tms) {
   const session = renderer.xr.getSession(); if (!session) return;
-  let aDown = false, bDown = false, stickY = 0;
+  let aDown = false, bDown = false, stickY = 0, clickR = false, clickL = false;
   // diagnostics in the strip: what the browser hands us, and which button index is down
   const sig = Array.from(session.inputSources).map(src => (src.handedness || '?') + ':' + (src.gamepad ? src.gamepad.buttons.length + 'b/' + src.gamepad.axes.length + 'a' : 'no-pad') + (src.profiles && src.profiles[0] ? ' ' + src.profiles[0] : '')).join('  ');
   if (sig !== pollControllers.sig) { pollControllers.sig = sig; heard('controllers: ' + (sig || 'none'), true); }
@@ -964,6 +965,7 @@ function pollControllers(tms) {
     if (down.length && tms - (pollControllers.lastLog || 0) > 400) { pollControllers.lastLog = tms; heard((src.handedness || '?') + ' pressed ' + down.join(',') + (gp.axes.length >= 4 ? '  stick ' + gp.axes[2].toFixed(1) + ',' + gp.axes[3].toFixed(1) : ''), true); }
     if (b[4] && b[4].pressed) aDown = true;                          // xr-standard: 4 = A / X, 5 = B / Y
     if (b[5] && b[5].pressed) bDown = true;
+    if (b[3] && b[3].pressed) { if (src.handedness === 'left') clickL = true; else clickR = true; }
     const ay = gp.axes.length >= 4 ? gp.axes[3] : (gp.axes.length >= 2 ? gp.axes[1] : 0);   // xr-standard: stick = axes[2..3]; some pads report [0..1]
     if (Math.abs(ay) > Math.abs(stickY)) stickY = ay;                                       // either stick
   }
@@ -974,6 +976,11 @@ function pollControllers(tms) {
     if (left > 0) setHudState('Hold… aligning in ' + (left / 1000).toFixed(1) + ' s (release to cancel)');
     else if (!alignDone) { alignDone = true; alignHere('A held'); }
   } else if (alignHeld) { alignHeld = 0; if (!alignDone) updateAlignState(); }
+  // stick CLICK: right = zoom in, left = zoom out (one step per click)
+  if (clickR && !stick.clickRWas) zoom(1 / 1.6); if (clickL && !stick.clickLWas) zoom(1.6);
+  stick.clickRWas = clickR; stick.clickLWas = clickL;
+  // stick deflection readout (throttled) so a dead or inverted axis is visible in the strip
+  if (Math.abs(stickY) > 0.3 && tms - (stick.logAt || 0) > 500) { stick.logAt = tms; heard('stick ' + stickY.toFixed(2) + (stickY < 0 ? ' (forward)' : ' (back)'), true); }
   // B / Y: return (close the photo, else back to the wide view) -- on release, once
   if (bDown && !bWas) { if (heldObj) release(); else zoomReturn(); }
   bWas = bDown;
