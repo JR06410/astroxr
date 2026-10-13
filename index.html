@@ -80,6 +80,8 @@
   #heardDesk { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(130px + env(safe-area-inset-bottom, 0px)); z-index: 4; font-size: 15px; color: var(--accent); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 5px 14px; }
   #hud #heard { font-size: 17px; color: var(--accent); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 5px 14px; }
   #voice.on, #hud #hudVoice.on { background: var(--accent); color: #1a1206; border-color: var(--accent); font-weight: 600; }
+  #hud #legend { font-size: 15px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 5px 14px; }
+  #hud #legend b { color: var(--accent); }
   #hud #hudState { cursor: pointer; font-size: 18px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; }
   @media (max-width: 600px) { #brand { font-size: 16px; } }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -161,6 +163,7 @@
     <button id="hudExit">Exit</button>
   </div>
   <div id="heard" hidden></div>
+  <div id="legend">Trigger: pick · <b>A</b> hold 1 s: align north here · <b>B</b>: return · stick up/down: zoom · say "align"</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js"></script>
@@ -688,7 +691,7 @@ $('hudState').onclick = () => { hudForce = !hudForce; updateAlignState(); };
 function updateAlignState() {
   const el = $('align-state'), tx = $('alignText');
   $('hudAlign').hidden = false;
-  if (!aligned) { el.classList.remove('ok'); tx.textContent = phoneMode ? 'Compass only' : 'Not aligned'; $('hudState').textContent = phoneMode ? 'Compass only — put Polaris in the reticle and tap Align' : 'Not aligned — look at Polaris and pull the trigger'; return; }
+  if (!aligned) { el.classList.remove('ok'); tx.textContent = phoneMode ? 'Compass only' : 'Not aligned'; $('hudState').textContent = phoneMode ? 'Compass only — put Polaris in the reticle and tap Align' : (xrMode === 'immersive-vr' ? 'Not aligned — face north and hold A (or say "align")' : 'Not aligned — reticle on Polaris, hold A (or say "align")'); return; }
   const min = Math.round((Date.now() - aligned.at) / 60000);
   const stale = min >= 10;
   el.classList.toggle('ok', !stale);
@@ -698,7 +701,7 @@ function updateAlignState() {
 }
 const POLARIS = 'Polaris';
 $('alignBtn').onclick = () => alignOn(POLARIS);
-$('hudAlign').onclick = () => alignOn(POLARIS);
+$('hudAlign').onclick = () => alignHere('button');
 $('resetYaw').onclick = () => { yaw = 0; aligned = null; store('yaw', 0); store('aligned', null); updateSky(); };
 
 // ---------------------------------------------------------------- pull an object closer
@@ -830,17 +833,43 @@ function selectObject(o) {
   prefetch();                                      // the destination is known the moment you click: start fetching now
 }
 function clearSelection() { if (target) { showSelected(target, false); target = null; document.querySelectorAll('#strip button').forEach(b => b.classList.remove('active')); guide.visible = false; } }
-function select() {                              // trigger / pinch / click: grab what you're looking at, else align
+function select() {                              // trigger / pinch / click: PICK only -- never aligns
   if (heldObj) return release();
   const o = objectInView();
-  if (o) { hold(o); return; }
-  if (!renderer.xr.isPresenting) return;
-  // Align only when it is plainly meant: never aligned yet, or the reticle is on (within 12 deg of) the computed
-  // Polaris. Any other empty-sky trigger just clears the selection -- it used to re-align every single time.
-  if (xrMode === 'immersive-vr') { clearSelection(); return; }     // VR: nothing real to align to; the HUD button / "align" re-centre north
-  const pol = targetObj(POLARIS);
-  const nearPolaris = !!pol && pol.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize().dot(fwdOf()) > Math.cos(12 * DEG);
-  if (!aligned || nearPolaris) alignOn(POLARIS); else { clearSelection(); heard('trigger on empty sky: say "align" or look at Polaris to re-align', false); }
+  if (o) hold(o); else clearSelection();
+}
+// Align is a deliberate act, so it has its own control: hold A (right) or X (left) for one second. The HUD
+// counts down, then the sky's yaw is set so Polaris -- north -- lands where you are looking. In AR that means
+// the reticle is on the real Polaris; in VR it is the owner declaring "this way is north". The HUD button
+// and the voice command do the same thing at once.
+const ALIGN_HOLD_MS = 1000;
+let alignHeld = 0, alignDone = false, lastZoomPush = 0, bWas = false;
+function alignHere(why) {
+  alignOn(POLARIS);
+  heard((xrMode === 'immersive-vr' ? 'north set here' : 'aligned on Polaris') + (why ? ' (' + why + ')' : ''), true);
+}
+function pollControllers(tms) {
+  const session = renderer.xr.getSession(); if (!session) return;
+  let aDown = false, bDown = false, stickY = 0;
+  for (const src of session.inputSources) {
+    const gp = src.gamepad; if (!gp) continue;                      // hands have no gamepad: they use the HUD button / voice
+    const b = gp.buttons;
+    if (b[4] && b[4].pressed) aDown = true;                          // xr-standard: 4 = A / X, 5 = B / Y
+    if (b[5] && b[5].pressed) bDown = true;
+    if (src.handedness === 'right' && gp.axes.length >= 4) stickY = gp.axes[3];
+  }
+  // A / X: hold to align
+  if (aDown) {
+    if (!alignHeld) { alignHeld = tms; alignDone = false; }
+    const left = ALIGN_HOLD_MS - (tms - alignHeld);
+    if (left > 0) $('hudState').textContent = 'Hold… aligning in ' + (left / 1000).toFixed(1) + ' s (release to cancel)';
+    else if (!alignDone) { alignDone = true; alignHere('A held'); }
+  } else if (alignHeld) { alignHeld = 0; if (!alignDone) updateAlignState(); }
+  // B / Y: return (close the photo, else back to the wide view) -- on release, once
+  if (bDown && !bWas) { if (heldObj) release(); else zoomReturn(); }
+  bWas = bDown;
+  // right stick up / down: one zoom step per push (deadzone, 350 ms repeat)
+  if (Math.abs(stickY) > 0.6 && tms - lastZoomPush > 350) { lastZoomPush = tms; zoom(stickY < 0 ? 1 / 1.6 : 1.6); }
 }
 addEventListener('pointerup', e => { if (phoneMode && drag && !drag[4] && e.target === renderer.domElement) select(); });   // phone: tap = grab/release
 for (let i = 0; i < 2; i++) { const c = renderer.xr.getController(i); c.addEventListener('selectstart', select); scene.add(c); }
@@ -1056,7 +1085,7 @@ const voicePref = new URLSearchParams(location.search).get('voice');          //
 const SR = (isQuest && voicePref !== 'sr') ? null : SR_API;     // the Quest defines the API but it never answers
 let rec = null, voiceOn = false, voiceRestart = 0;
 const VOICE = [
-  [/\b(align|aligned|a line|online)\b/, 'align', () => alignOn(POLARIS)],
+  [/\b(align|aligned|a line|online)\b/, 'align', () => alignHere('voice')],
   [/\b(zoom in|zoomin|closer|magnify|bigger)\b/, 'zoom in', () => zoom(1 / 1.6)],
   [/\b(zoom out|zoomout|wider|smaller|back out)\b/, 'zoom out', () => zoom(1.6)],
   [/\b(return|reset|wide view|go back)\b/, 'return', zoomReturn],
@@ -1088,7 +1117,7 @@ function stopSR() { clearTimeout(voiceRestart); if (rec) { rec.onend = null; try
 // --- back end 3: keyword spotter. TensorFlow.js Speech Commands (1.5 MB library + 6 MB base model, ~2 s to
 // start, GPU) with a transfer-learned head for OUR six words, trained on the owner's voice from a bundled
 // examples file (assets/voice/examples.bin) or in the Settings > Voice panel. Preferred everywhere once a
-// model exists; Vosk (Quest) / Web Speech (desktop) remain the fallbacks until then.
+// model exists; Web Speech (desktop) remains the fallback until then.
 const KWS_WORDS = ['align', 'zoom in', 'zoom out', 'return', 'freeze', 'live'];
 const KWS_EXAMPLES = 'assets/voice/examples.bin';
 const TF_JS = 'https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.22.0/tf.min.js';
@@ -1230,6 +1259,7 @@ async function start(mode) {
     session.addEventListener('end', () => { xrMode = null; hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); applyGain(); });
     await renderer.xr.setSession(session);
     xrMode = mode; applyGain();
+    $('hudAlign').textContent = mode === 'immersive-vr' ? 'Align: north here' : 'Align on Polaris';
     if (mode === 'immersive-vr') setTimeout(() => { alignOn(POLARIS); heard('VR: north (Polaris) set straight ahead; site ' + lat.toFixed(2) + ', ' + lon.toFixed(2) + ' ' + new Date().toLocaleTimeString(), true); }, 800);
     hud.style.display = 'flex'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = true);
     $('hudExit').onclick = () => session.end();
@@ -1251,6 +1281,7 @@ let last = 0, lastL = 0;
 updateSky();
 renderer.setAnimationLoop(tms => {
   if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
+  if (renderer.xr.isPresenting) pollControllers(tms);
   const eye = eyeOf();
   horizon.position.copy(eye); sky.matrix.setPosition(eye);        // sky and horizon ride with the eye: everything is at infinity
   // The sky really does rotate (15 deg/hour), so at a narrow field the view drifts off an object within a minute.
