@@ -257,7 +257,7 @@ const skyMat = new THREE.ShaderMaterial({
       vec3 col = knee > 0.0 ? asinh3(v * knee) / asinh3(vec3(knee)) : v;
       gl_FragColor = vec4(col * gain, 1.0); }`,
 });
-sky.add(new THREE.Mesh(new THREE.SphereGeometry(R * 1.5, 48, 32), skyMat));
+const skySphere = new THREE.Mesh(new THREE.SphereGeometry(R * 1.5, 48, 32), skyMat); skySphere.renderOrder = -10; sky.add(skySphere);
 
 const dirOf = (raDeg, decDeg) => new THREE.Vector3(Math.cos(decDeg * DEG) * Math.cos(raDeg * DEG), Math.cos(decDeg * DEG) * Math.sin(raDeg * DEG), Math.sin(decDeg * DEG));
 function frameAt(d) {                            // tangent frame: north up, east left as seen from inside
@@ -403,7 +403,7 @@ function autoExpose(now) {
   if (zq || AE.quadsOn) {
     const f = fwdOf().clone(), cosQ = Math.cos((LOUPE_DEG / loupe.m / 2 + 2) * DEG);
     for (const o of OBJECTS) {
-      const on = zq && !o.hiQuad && o.quad.getWorldPosition(_v3).sub(eyeOf()).normalize().dot(f) > cosQ;
+      const on = zq && !o.hiQuad && !o.dupOf && o.quad.getWorldPosition(_v3).sub(eyeOf()).normalize().dot(f) > cosQ;
       if (on && !o.loaded) loadTex(o);
       const m = o.quad.material;
       if (on && m.blending !== THREE.NormalBlending) { m.blending = THREE.NormalBlending; m.uniforms.replace.value = 1.0; m.needsUpdate = true; }
@@ -417,7 +417,7 @@ function autoExpose(now) {
     for (const o of OBJECTS) if (o.hiLoading) busy++;
     for (const o of OBJECTS) {
       if (busy >= 2) break;
-      if (o.hiTex || o.hiLoading || o.hiFailed || o.size[0] > 16 || (o.hiCooldown && now < o.hiCooldown)) continue;
+      if (o.dupOf || o.hiTex || o.hiLoading || o.hiFailed || o.size[0] > 16 || (o.hiCooldown && now < o.hiCooldown)) continue;
       if (o.quad.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize().dot(f) > cosF) { loadHi(o); busy++; }
     }
   }
@@ -485,6 +485,18 @@ function loadTex(o) {
   loader.load(o.path, t => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; t.anisotropy = renderer.capabilities.getMaxAnisotropy();
     const b = skyLevel(t.image); o.quad.material.uniforms.black.value.set(b[0], b[1], b[2]); o.quad.material.uniforms.map.value = t;
     if (!AE.quadsOn) o.quad.visible = !o.covered && !(HIPS.enabled && HIPS.loaded.size > 0); });
+}
+{
+  const sepDeg = (a, b) => Math.acos(Math.max(-1, Math.min(1, dirOf(a.ra, a.dec).dot(dirOf(b.ra, b.dec))))) / DEG;
+  for (const o of OBJECTS) {
+    let owner = null;
+    for (const q of OBJECTS) {
+      const r = q.size[0] / Math.max(0.1, o.size[0]);
+      if (q === o || r < 1.5 || r > 4) continue;
+      if (sepDeg(o, q) < 0.5 * q.size[0] / 60 && (!owner || q.size[0] > owner.size[0])) owner = q;
+    }
+    if (owner) o.dupOf = owner;                                        // imagery comes from the owner; the label stays
+  }
 }
 for (const o of OBJECTS) {
   const w = chord(o.field[0] * ARCMIN), h = chord(o.field[1] * ARCMIN);
@@ -571,6 +583,7 @@ function tileMesh(layer, ipix) {
   for (let i = 0; i < G; i++) for (let j = 0; j < G; j++) { const a = i * (G + 1) + j, b = a + 1, c = a + G + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx);
   const m = surveyMaterial(); m.uniforms.feather.value = 0.0; m.uniforms.gain.value = HIPS.gain * gainVal(); m.uniforms.stretch.value = stretchVal(); m.uniforms.knee.value = kneeVal(); m.side = THREE.DoubleSide;
+  if (renderer.xr.isPresenting) { m.blending = THREE.NormalBlending; m.uniforms.replace.value = 1.0; }   // headset: replace, never add
   m.uniforms.dechroma.value = $('dechroma').checked ? 1 : 0;
   const mesh = new THREE.Mesh(g, m); mesh.visible = false; mesh.renderOrder = layer.order === 3 ? -3 : -2; mesh.layers.set(IMG_LAYER);
   return mesh;
@@ -1565,13 +1578,14 @@ async function start(mode) {
   renderer.xr.setFramebufferScaleFactor(+(qsx.get('fb') || 1.0));     // 1.25 cost frames on the Quest 3 (text ghosting = below 72 Hz)
   try {
     const session = await navigator.xr.requestSession(mode, init);
-    session.addEventListener('end', () => { xrMode = null; AE.quadsOn = false; for (const o of OBJECTS) { const m = o.quad.material; if (m.blending !== THREE.AdditiveBlending) { m.blending = THREE.AdditiveBlending; m.uniforms.replace.value = 0.0; m.needsUpdate = true; } o.quad.visible = o.loaded && !!m.uniforms.map.value && !o.covered && !(HIPS.enabled && HIPS.loaded.size > 0); } skyMat.uniforms.map.value = skyTex; skyMat.uniforms.black.value.set(0, 0, 0); skyMat.uniforms.knee.value = 0; while (HIPS.pending.length) HIPS.pending.shift()(); hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); applyGain(); });
+    session.addEventListener('end', () => { xrMode = null; AE.quadsOn = false; for (const t of HIPS.loaded) if (t.mesh) { const m = t.mesh.material; m.blending = THREE.AdditiveBlending; m.uniforms.replace.value = 0.0; m.needsUpdate = true; } for (const o of OBJECTS) { const m = o.quad.material; if (m.blending !== THREE.AdditiveBlending) { m.blending = THREE.AdditiveBlending; m.uniforms.replace.value = 0.0; m.needsUpdate = true; } o.quad.visible = o.loaded && !!m.uniforms.map.value && !o.covered && !(HIPS.enabled && HIPS.loaded.size > 0); } skyMat.uniforms.map.value = skyTex; skyMat.uniforms.black.value.set(0, 0, 0); skyMat.uniforms.knee.value = 0; while (HIPS.pending.length) HIPS.pending.shift()(); hud.style.display = 'none'; ['bar', 'drawer', 'stripbar', 'strip'].forEach(i => $(i).hidden = false); release(); updateSky(); applyGain(); });
     await renderer.xr.setSession(session);
     try { renderer.xr.setFoveation(+(qsx.get('fov') || 0.5)); } catch {}
     perf.sessionAt = performance.now();
     warmQueue = LABELS.map(L => L.mesh.material.map).filter(t => t && !t.__warm);   // upload label textures gradually
     telemetry('session start ' + mode + ' ' + new Date().toISOString() + ' ' + (navigator.userAgent.match(/OculusBrowser\/[\d.]+/) || navigator.userAgent.slice(0, 60)) + ' fb ' + (qsx.get('fb') || '1.0') + ' fov ' + (qsx.get('fov') || '0.5') + ' xorder ' + (qsx.get('xorder') || 'default'));
     skyMat.uniforms.map.value = dssTex; skyMat.uniforms.black.value.copy(dssBlack);   // DSS2 base in the headset
+    for (const t of HIPS.loaded) if (t.mesh) { const m = t.mesh.material; m.blending = THREE.NormalBlending; m.uniforms.replace.value = 1.0; m.needsUpdate = true; }
     if (!loupe.rt) loupeInit(); loupe.warm = true;                                        // first frame: one hidden eyepiece render pays the set-up cost
     xrMode = mode; AE.knee = AE.target = (mode === 'immersive-ar' ? XR.kneeAR : XR.kneeVR); applyGain();
     $('hudAlign').textContent = mode === 'immersive-vr' ? 'Align: north here' : 'Align on Polaris';
