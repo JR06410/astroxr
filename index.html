@@ -395,6 +395,7 @@ function autoExpose(now) {
   const deep = loupe.m >= 4; hiQuadsVisible(deep && !heldObj);
   if (deep) {
     const f = fwdOf().clone(), cosF = Math.cos((LOUPE_DEG / loupe.m / 2 + 1.5) * DEG); let busy = 0;
+    trimHiQuads(f);
     for (const o of OBJECTS) if (o.hiLoading) busy++;
     for (const o of OBJECTS) {
       if (busy >= 2) break;
@@ -613,8 +614,9 @@ function updateHipsInner(fwd, now) {
   want.sort((a, b) => b[0] - a[0]);
   for (const [, t] of want) { if (HIPS.inflight >= HIPS.maxInflight) break; loadTile(t, now); }
   for (const layer of HIPS.layers) {
-    const deepCap = renderer.xr.isPresenting && !zoomed && layer.order === HIPS.maxOrder;
-    const cap = active.has(layer.order) ? (deepCap ? Math.min(layer.maxLoaded, 160) : layer.maxLoaded) : 0;   // levels the view no longer uses are released; headset keeps <= 160 finest tiles
+    const xr = renderer.xr.isPresenting;
+    const xrCap = !xr ? layer.maxLoaded : layer.order === HIPS.maxOrder ? (zoomed ? 110 : 160) : 90;   // headset: bounded GPU memory, zoomed or not
+    const cap = active.has(layer.order) ? Math.min(layer.maxLoaded, xrCap) : 0;   // levels the view no longer uses are released
     const have = layer.tiles.filter(t => t.mesh);
     if (have.length > cap) {
       for (const t of have.sort((a, b) => a.last - b.last).slice(0, have.length - cap)) {
@@ -934,6 +936,16 @@ function ensureHiQuad(o) {
   if (renderer.xr.isPresenting) heard((o.survey ? o.survey[1] : 'hi-res') + ' for ' + o.name, true);
 }
 function hiQuadsVisible(on) { for (const q of HIQ) q.visible = on; }
+const HIQ_MAX = 6;
+function trimHiQuads(fwd) {                                           // headset: bound the 1600 px patches held in GPU memory
+  if (HIQ.length <= HIQ_MAX) return;
+  const scored = HIQ.map(q => ({ q, d: q.getWorldPosition(new THREE.Vector3()).sub(eyeOf()).normalize().dot(fwd) })).sort((a, b) => a.d - b.d);
+  for (const { q } of scored.slice(0, HIQ.length - HIQ_MAX)) {
+    const o = OBJECTS.find(x => x.hiQuad === q); if (!o || o === heldObj) continue;
+    sky.remove(q); q.geometry.dispose(); q.material.dispose(); if (o.hiTex) { o.hiTex.dispose(); o.hiTex = null; } o.hiQuad = null; o.hiFailed = false;
+    HIQ.splice(HIQ.indexOf(q), 1);
+  }
+}
 // ---------------------------------------------------------------- pull an object closer
 const held = new THREE.Group(); camera.add(held); held.visible = false;
 let heldObj = null;
