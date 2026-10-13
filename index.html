@@ -564,6 +564,9 @@ function tileAt(layer, ip) {                       // make the record for a deep
 const skyInv = new THREE.Matrix3();
 function updateHips(fwd, now) {
   if (!HIPS.enabled) return;
+  const _t0 = performance.now(); try { return updateHipsInner(fwd, now); } finally { const dt = performance.now() - _t0; if (dt > tele.tHips) tele.tHips = dt; }
+}
+function updateHipsInner(fwd, now) {
   skyInv.setFromMatrix4(sky.matrixWorld).invert();                     // gaze in the sky's own (equatorial) frame
   const g = fwd.clone().applyMatrix3(skyInv).normalize();
   const zoomed = renderer.xr.isPresenting && loupe.m > 1;
@@ -1527,7 +1530,8 @@ const perfOn = true;                                                 // measured
 // take a write, so during a session one line every 10 s (frame avg/worst, draw calls, tiles, zoom) and any
 // JavaScript error are POSTed to the sink named in telemetry.json (tools/telemetry_server.py behind a
 // Cloudflare quick tunnel; see tools/set_telemetry.py). No file, no telemetry.
-const tele = { url: null, at: 0, worst: 0, sum: 0, n: 0 };
+const tele = { url: null, at: 0, worst: 0, sum: 0, n: 0, tEnter: 0, tLabels: 0, tHips: 0, tSky: 0, tLoupe: 0 };
+const timed = (key, fn) => { const t0 = performance.now(); const r = fn(); const dt = performance.now() - t0; if (dt > tele[key]) tele[key] = dt; return r; };
 fetch('telemetry.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(j => { if (j && j.url) tele.url = j.url.replace(/\/$/, '') + '/log'; }).catch(() => {});
 function telemetry(line) { if (!tele.url) return; try { fetch(tele.url, { method: 'POST', body: line, headers: { 'Content-Type': 'text/plain' } }).catch(() => {}); } catch {} }
 window.addEventListener('error', e => telemetry('ERROR ' + (e.message || '') + ' @' + (e.lineno || '') + (e.error && e.error.stack ? ' ' + String(e.error.stack).slice(0, 300) : '')));
@@ -1545,8 +1549,8 @@ renderer.setAnimationLoop(tms => {
       tele.worst = Math.max(tele.worst, perf.worst); tele.sum += perf.sum; tele.n += perf.n;
       if (renderer.xr.isPresenting && tms - tele.at > 10000) {
         tele.at = tms;
-        telemetry(`${xrMode === 'immersive-ar' ? 'AR' : 'VR'} avg ${(tele.sum / Math.max(1, tele.n)).toFixed(1)}ms worst ${tele.worst.toFixed(1)}ms draws ${info.calls} tris ${(info.triangles / 1000).toFixed(0)}k tiles ${HIPS.loaded.size} order ${HIPS.maxOrder} zoom x${loupe.m} labels ${LABELS.filter(L => L.mesh.visible).length} heap ${performance.memory ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + 'MB' : '?'} warm ${warmQueue.length}`);
-        tele.worst = 0; tele.sum = 0; tele.n = 0;
+        telemetry(`${xrMode === 'immersive-ar' ? 'AR' : 'VR'} avg ${(tele.sum / Math.max(1, tele.n)).toFixed(1)}ms worst ${tele.worst.toFixed(1)}ms draws ${info.calls} tris ${(info.triangles / 1000).toFixed(0)}k tiles ${HIPS.loaded.size} order ${HIPS.maxOrder} zoom x${loupe.m} labels ${LABELS.filter(L => L.mesh.visible).length} heap ${performance.memory ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + 'MB' : '?'} warm ${warmQueue.length} | max ms: enter ${tele.tEnter.toFixed(1)} labels ${tele.tLabels.toFixed(1)} hips ${tele.tHips.toFixed(1)} sky ${tele.tSky.toFixed(1)} loupe ${tele.tLoupe.toFixed(1)}`);
+        tele.worst = 0; tele.sum = 0; tele.n = 0; tele.tEnter = tele.tLabels = tele.tHips = tele.tSky = tele.tLoupe = 0;
       }
       const show = perfShow || (renderer.xr.isPresenting && perf.sessionAt && tms - perf.sessionAt < 15000);
       if (show) { if (renderer.xr.isPresenting) hwSet('msg', txt, '#ffb05a'); else { $('heardDesk').hidden = false; $('heardDesk').textContent = txt; } }
@@ -1554,12 +1558,12 @@ renderer.setAnimationLoop(tms => {
     }
   }
   if (renderer.xr.isPresenting) {
-    if (skyPhase > 0 || tms - last > 1000) { if (updateSkyStaggered()) last = tms; }   // mid-sequence: keep stepping
-    else if (tms - lastL > 500) { placeLabels(); lastL = tms; }
+    if (skyPhase > 0 || tms - last > 1000) { if (timed('tSky', updateSkyStaggered)) last = tms; }   // mid-sequence: keep stepping
+    else if (tms - lastL > 500) { timed('tLabels', placeLabels); lastL = tms; }
   } else if (tms - last > 1000) { updateSky(); last = tms; } else if (tms - lastL > 250) { placeLabels(); lastL = tms; }
   if (renderer.xr.isPresenting) {
     pollControllers(tms); hudWorld.visible = true; autoExpose(tms); lazyFollow(tms);
-    if (HIPS.pending.length) HIPS.pending.shift()();                         // one tile per frame: analysis + upload
+    if (HIPS.pending.length) timed('tEnter', HIPS.pending.shift());           // one tile per frame: analysis + upload
     for (let i = 0; i < 2 && warmQueue.length; i++) { const t = warmQueue.shift(); try { renderer.initTexture(t); t.__warm = true; } catch {} }
     if (hw.msg && tms > hw.msgUntil) hwSet('msg', '');
     if (hw.state && tms > hw.stateUntil && !alignHeld) hwSet('state', '');   // the countdown keeps refreshing it
@@ -1582,7 +1586,7 @@ renderer.setAnimationLoop(tms => {
   }
   if (phoneMode) applyOrientation();
   renderer.setClearColor(0x000000, (renderer.xr.isPresenting && renderer.xr.getSession()?.environmentBlendMode !== 'opaque') || (phoneMode && $('cam').srcObject) ? 0 : 1);
-  loupeRender();
+  timed('tLoupe', loupeRender);
   renderer.render(scene, camera);
 });
 </script>
