@@ -195,6 +195,10 @@ const DATA = JSON.parse(document.getElementById('data').textContent);
 const STARS = DATA.stars.map(st => [st.n, st.r, st.d, st.m]);
 const PLANETS = ['Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn'];
 const R = 50;                                   // sky radius, metres (everything sits "at infinity")
+// telemetry state + worst-case timer: declared first, they are touched by code that runs during start-up
+const tele = { url: null, at: 0, worst: 0, sum: 0, n: 0, tEnter: 0, tLabels: 0, tHips: 0, tSky: 0, tLoupe: 0 };
+const timed = (key, fn) => { const t0 = performance.now(); const r = fn(); const dt = performance.now() - t0; if (dt > tele[key]) tele[key] = dt; return r; };
+
 const DEG = Math.PI / 180, ARCMIN = DEG / 60;
 const chord = a => 2 * R * Math.tan(a / 2);     // metres spanned by an angle at radius R
 
@@ -1542,8 +1546,6 @@ const perfOn = true;                                                 // measured
 // take a write, so during a session one line every 10 s (frame avg/worst, draw calls, tiles, zoom) and any
 // JavaScript error are POSTed to the sink named in telemetry.json (tools/telemetry_server.py behind a
 // Cloudflare quick tunnel; see tools/set_telemetry.py). No file, no telemetry.
-const tele = { url: null, at: 0, worst: 0, sum: 0, n: 0, tEnter: 0, tLabels: 0, tHips: 0, tSky: 0, tLoupe: 0 };
-const timed = (key, fn) => { const t0 = performance.now(); const r = fn(); const dt = performance.now() - t0; if (dt > tele[key]) tele[key] = dt; return r; };
 fetch('telemetry.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(j => { if (j && j.url) tele.url = j.url.replace(/\/$/, '') + '/log'; }).catch(() => {});
 function telemetry(line) { if (!tele.url) return; try { fetch(tele.url, { method: 'POST', body: line, headers: { 'Content-Type': 'text/plain' } }).catch(() => {}); } catch {} }
 window.addEventListener('error', e => telemetry('ERROR ' + (e.message || '') + ' @' + (e.lineno || '') + (e.error && e.error.stack ? ' ' + String(e.error.stack).slice(0, 300) : '')));
